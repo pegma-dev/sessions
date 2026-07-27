@@ -1,0 +1,62 @@
+# Sessions
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Server-side session records for [Pegma](https://pegma.dev) components: hashed
+identifiers, absolute plus idle expiry, and principal-wide revocation.
+
+> [!IMPORTANT]
+> Sessions is in early `0.x` development. Its public API is not stable, its
+> packages are not published, and it is not ready for production use.
+
+## Not an auth solution
+
+This is the **session record store** behind BFF-style auth — the durable
+answer to "is this session id live, and who is it?". It does not
+authenticate anyone: no OIDC handshake, no IdP integration, no cookie
+handling, no CSRF defense. Your host owns its login flow and its HTTP
+surface; this store remembers the result.
+
+What it does own, it owns opinionatedly:
+
+- **Hashed identifiers, non-optionally** — the raw session id is hashed
+  (SHA-256) at the port and never reaches a storage key, so a leaked table,
+  backup, or log hands out no live sessions. There is no option to skip
+  this; that option would be the vulnerability.
+- **Two expiries, one predicate** — an absolute lifetime *and* an idle
+  timeout, enforced through a single liveness function shared by the read
+  path and the sweep, with malformed timestamps failing closed. A
+  stolen-but-parked session dies at the idle window, not days later.
+- **Revocation that means it** — `destroyAllForPrincipal` is literal "signed
+  out everywhere" (account deletion, incident response), and its deletes are
+  deliberately unconditional: a session touched mid-revocation still dies.
+  The hygiene sweep is the opposite — version-conditional, so a session that
+  came back to life mid-sweep survives. Keeping those two rules opposite is
+  the design.
+- **Reads that garbage-collect and never resurrect** — a dead row found on
+  read is lazily purged; the idle-anchor touch declines to write back a
+  session a concurrent destroy just removed, and a failed touch never fails
+  the request.
+
+One data rule, stated up front: session records hold identity claims and
+host data, **never tokens**. Nothing re-presentable to another service
+belongs at rest here — that is the point of the BFF pattern this store
+serves.
+
+## Where it fits
+
+`@pegma/sessions` declares one collection over an injected
+[`@pegma/storage-core`](https://github.com/pegma-dev/storage-core) `Store`,
+and takes time, logging, and `PrincipalId` from
+[`@pegma/spine`](https://github.com/pegma-dev/spine). It does not depend on
+authorization-core — a session resolving to a `PrincipalId` is the join
+point, not a coupling.
+
+The design is extracted from a production BFF session store in the
+RetireGolden account API, the ecosystem's reference application. See
+[docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the model, the design
+decisions, and the delivery phases.
+
+## License
+
+MIT © RetireGolden, LLC
