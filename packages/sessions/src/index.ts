@@ -299,12 +299,15 @@ function isLive(
   idleTimeoutMs: number,
 ): boolean {
   const at = timestamp(now);
+  const created = timestamp(record.createdAt);
   const expires = timestamp(record.expiresAt);
   const lastSeen = timestamp(record.lastSeenAt);
   return (
     Number.isFinite(at) &&
+    Number.isFinite(created) &&
     Number.isFinite(expires) &&
     Number.isFinite(lastSeen) &&
+    created <= lastSeen &&
     lastSeen <= at &&
     at < expires &&
     at - lastSeen < idleTimeoutMs
@@ -654,8 +657,7 @@ export function createSessionStore(
         }
         const revocation = state.value;
         if (revocation.revocationToken !== revocationToken) {
-          clearedRevoking = true;
-          break;
+          throwRevocationTransactionLimit();
         }
         const outcome = await sessions.transact(SESSION_PARTITION, [
           {

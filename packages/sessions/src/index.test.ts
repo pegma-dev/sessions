@@ -290,12 +290,13 @@ for (const backend of backends) {
       ).toBeNull();
     });
 
-    it("fails closed on invalid now, expiry, and idle timestamps", async () => {
+    it("fails closed on invalid now, creation, expiry, and idle timestamps", async () => {
       const inspected = inspectStorage(backend.freshStore());
       const sessions = createSessionStore(inspected.store, {
         clock: fixedClock(NOW),
       });
       await sessions.create("invalid-now", NEW_SESSION);
+      await sessions.create("invalid-created", NEW_SESSION);
       await sessions.create("invalid-expiry", NEW_SESSION);
       await sessions.create("invalid-idle", NEW_SESSION);
       await sessions.create("normalized-expiry", NEW_SESSION);
@@ -304,9 +305,13 @@ for (const backend of backends) {
 
       const records = inspected.records();
       const stored = storedSessions(await records.list("session"));
+      const createdKey = await sha256("invalid-created");
       const expiryKey = await sha256("invalid-expiry");
       const idleKey = await sha256("invalid-idle");
       const normalizedKey = await sha256("normalized-expiry");
+      const createdRecord = stored.find(
+        (value) => value.idHash === createdKey,
+      ) as StoredSessionFixture;
       const expiryRecord = stored.find(
         (value) => value.idHash === expiryKey,
       ) as StoredSessionFixture;
@@ -316,6 +321,7 @@ for (const backend of backends) {
       const normalizedRecord = stored.find(
         (value) => value.idHash === normalizedKey,
       ) as StoredSessionFixture;
+      await records.put({ ...createdRecord, createdAt: "not-a-time" });
       await records.put({ ...expiryRecord, expiresAt: "Infinity" });
       await records.put({ ...idleRecord, lastSeenAt: "NaN" });
       await records.put({
@@ -323,6 +329,7 @@ for (const backend of backends) {
         expiresAt: "2026-07-32T12:00:00.000Z",
       });
 
+      expect(await sessions.get("invalid-created", NOW)).toBeNull();
       expect(await sessions.get("invalid-expiry", NOW)).toBeNull();
       expect(await sessions.get("invalid-idle", NOW)).toBeNull();
       expect(await sessions.get("normalized-expiry", NOW)).toBeNull();
@@ -763,6 +770,62 @@ for (const backend of backends) {
       await expect(
         issuerWithAheadClock.create("skewed-revocation-after", NEW_SESSION),
       ).resolves.toMatchObject(NEW_SESSION);
+    });
+
+    it("does not report success after a newer revoker replaces its lease", async () => {
+      const base = backend.freshStore();
+      let firstListEntered!: () => void;
+      let releaseFirstList!: () => void;
+      const firstListStarted = new Promise<void>((resolve) => {
+        firstListEntered = resolve;
+      });
+      const firstListRelease = new Promise<void>((resolve) => {
+        releaseFirstList = resolve;
+      });
+      let pauseFirstList = true;
+      const wrapped = wrapSessionCollection(base, (collection) => ({
+        ...collection,
+        async list(partition) {
+          const listed = await collection.list(partition);
+          if (pauseFirstList) {
+            pauseFirstList = false;
+            firstListEntered();
+            await firstListRelease;
+          }
+          return listed;
+        },
+      }));
+      const firstRevoker = createSessionStore(wrapped, {
+        clock: fixedClock(NOW),
+      });
+      const replacementRevoker = createSessionStore(wrapped, {
+        clock: fixedClock("2026-07-27T13:00:00.001Z"),
+      });
+      const issuerAfterReplacement = createSessionStore(wrapped, {
+        clock: fixedClock("2026-07-27T13:00:00.002Z"),
+      });
+      await firstRevoker.create("replaced-revocation-old", NEW_SESSION);
+
+      const firstRevocation = firstRevoker.destroyAllForPrincipal(PRINCIPAL);
+      await firstListStarted;
+      await expect(
+        replacementRevoker.destroyAllForPrincipal(PRINCIPAL),
+      ).resolves.toBe(1);
+      await issuerAfterReplacement.create(
+        "replaced-revocation-new",
+        NEW_SESSION,
+      );
+      releaseFirstList();
+
+      await expect(firstRevocation).rejects.toThrow(
+        "Session revocation state changed too many times.",
+      );
+      expect(
+        await issuerAfterReplacement.get(
+          "replaced-revocation-new",
+          "2026-07-27T13:00:00.002Z",
+        ),
+      ).not.toBeNull();
     });
 
     it("rejects overlapping principal revocation while a guard lease is active", async () => {
