@@ -5,10 +5,6 @@
 Server-side session records for [Pegma](https://pegma.dev) components: hashed
 identifiers, absolute plus idle expiry, and principal-wide revocation.
 
-> [!IMPORTANT]
-> Sessions is in early `0.x` development. Its public API is not stable, its
-> packages are not published, and it is not ready for production use.
-
 ## Not an auth solution
 
 This is the **session record store** behind BFF-style auth — the durable
@@ -17,19 +13,27 @@ authenticate anyone: no OIDC handshake, no IdP integration, no cookie
 handling, no CSRF defense. Your host owns its login flow and its HTTP
 surface; this store remembers the result.
 
+> [!IMPORTANT]
+> Sessions is in early `0.x` development. Its public API is not stable, its
+> package is not published, and it is not ready for production use.
+
 What it does own, it owns opinionatedly:
 
 - **Hashed identifiers, non-optionally** — the raw session id is hashed
   (SHA-256) at the port and never reaches a storage key, so a leaked table,
   backup, or log hands out no live sessions. There is no option to skip
   this; that option would be the vulnerability.
-- **Two expiries, one predicate** — an absolute lifetime *and* an idle
+- **Two expiries, one predicate** — an absolute lifetime _and_ an idle
   timeout, enforced through a single liveness function shared by the read
-  path and the sweep, with malformed timestamps failing closed. A
-  stolen-but-parked session dies at the idle window, not days later.
+  path and the sweep, with malformed timestamps and future idle anchors
+  failing closed. A stolen-but-parked session dies at the idle window, not
+  days later.
 - **Revocation that means it** — `destroyAllForPrincipal` is literal "signed
   out everywhere" (account deletion, incident response), and its deletes are
   deliberately unconditional: a session touched mid-revocation still dies.
+  A durable per-principal revocation boundary also refuses session creation
+  that overlaps the revocation window, so a concurrent sign-in cannot sneak
+  behind a list snapshot.
   The hygiene sweep is the opposite — version-conditional, so a session that
   came back to life mid-sweep survives. Keeping those two rules opposite is
   the design.
@@ -52,8 +56,9 @@ and takes time, logging, and `PrincipalId` from
 authorization-core — a session resolving to a `PrincipalId` is the join
 point, not a coupling.
 
-The design is extracted from a production BFF session store in the
-RetireGolden account API, the ecosystem's reference application. See
+The design is extracted from the production BFF session store in the
+[RetireGolden account API](https://github.com/RetireGolden/retiregolden.org/tree/main/api),
+the ecosystem's reference application. See
 [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) for the model, the design
 decisions, and the delivery phases.
 

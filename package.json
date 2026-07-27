@@ -1,0 +1,31 @@
+{
+  "name": "sessions",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Server-side session records for Pegma components.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false && tsc -p tsconfig.test.json --pretty false",
+    "clean": "tsc -b --clean",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build && vitest run"
+  },
+  "devDependencies": {
+    "@azure/data-tables": "^13.3.1",
+    "@pegma/storage-azure-tables": "0.3.0",
+    "@types/node": "^26.1.1",
+    "azurite": "^3.36.0",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
