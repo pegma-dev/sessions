@@ -78,6 +78,7 @@ interface PrincipalRevocationRecord {
   readonly principalHash: string;
   readonly principalId: PrincipalId;
   readonly revoking: boolean;
+  readonly activeRevocations: number;
   readonly revokedThrough: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
 }
@@ -117,6 +118,7 @@ const sessionCollection = defineCollection<StoredSessionEntry>({
             principalHash: value.principalHash,
             principalId: value.principalId,
             revoking: String(value.revoking),
+            activeRevocations: String(value.activeRevocations),
             revokedThrough: value.revokedThrough,
             updatedAt: value.updatedAt,
           }),
@@ -128,6 +130,7 @@ const sessionCollection = defineCollection<StoredSessionEntry>({
           principalHash: String(record["principalHash"] ?? ""),
           principalId: String(record["principalId"] ?? "") as PrincipalId,
           revoking: String(record["revoking"] ?? "") === "true",
+          activeRevocations: Number(record["activeRevocations"] ?? 0),
           revokedThrough: String(record["revokedThrough"] ?? ""),
           updatedAt: String(record["updatedAt"] ?? ""),
         };
@@ -169,6 +172,13 @@ function checkedRevocationState(
   if (
     !Number.isFinite(timestamp(state.value.revokedThrough)) ||
     !Number.isFinite(timestamp(state.value.updatedAt))
+  ) {
+    throw new Error("Stored session revocation state is invalid.");
+  }
+  if (
+    !Number.isInteger(state.value.activeRevocations) ||
+    state.value.activeRevocations < 0 ||
+    state.value.revoking !== state.value.activeRevocations > 0
   ) {
     throw new Error("Stored session revocation state is invalid.");
   }
@@ -303,26 +313,59 @@ function createdRecord(
   });
 }
 
-function newRevocationRecord(
+function initialRevocationRecord(
   principalId: PrincipalId,
   principalHash: string,
   now: IsoTimestamp,
-  revoking: boolean,
-  previous?: PrincipalRevocationRecord,
 ): PrincipalRevocationRecord {
   const updatedAt = isoTimestamp(now, "Clock returned an invalid timestamp.");
-  const revokedThrough =
-    previous === undefined
-      ? revoking
-        ? updatedAt
-        : NO_PRINCIPAL_REVOCATION
-      : laterTimestamp(previous.revokedThrough, updatedAt);
   return {
     kind: "principalRevocation",
     principalHash,
     principalId,
-    revoking,
-    revokedThrough,
+    revoking: false,
+    activeRevocations: 0,
+    revokedThrough: NO_PRINCIPAL_REVOCATION,
+    updatedAt,
+  };
+}
+
+function beginRevocationRecord(
+  principalId: PrincipalId,
+  principalHash: string,
+  now: IsoTimestamp,
+  previous?: PrincipalRevocationRecord,
+): PrincipalRevocationRecord {
+  const updatedAt = isoTimestamp(now, "Clock returned an invalid timestamp.");
+  return {
+    kind: "principalRevocation",
+    principalHash,
+    principalId,
+    revoking: true,
+    activeRevocations: (previous?.activeRevocations ?? 0) + 1,
+    revokedThrough:
+      previous === undefined
+        ? updatedAt
+        : laterTimestamp(previous.revokedThrough, updatedAt),
+    updatedAt,
+  };
+}
+
+function finishRevocationRecord(
+  principalId: PrincipalId,
+  principalHash: string,
+  now: IsoTimestamp,
+  previous: PrincipalRevocationRecord,
+): PrincipalRevocationRecord {
+  const updatedAt = isoTimestamp(now, "Clock returned an invalid timestamp.");
+  const activeRevocations = Math.max(0, previous.activeRevocations - 1);
+  return {
+    kind: "principalRevocation",
+    principalHash,
+    principalId,
+    revoking: activeRevocations > 0,
+    activeRevocations,
+    revokedThrough: laterTimestamp(previous.revokedThrough, updatedAt),
     updatedAt,
   };
 }
@@ -377,11 +420,10 @@ export function createSessionStore(
           state === null
             ? {
                 action: "insert",
-                value: newRevocationRecord(
+                value: initialRevocationRecord(
                   session.principalId,
                   principalHash,
                   record.createdAt,
-                  false,
                 ),
               }
             : {
@@ -486,20 +528,18 @@ export function createSessionStore(
           state === null
             ? {
                 action: "insert",
-                value: newRevocationRecord(
+                value: beginRevocationRecord(
                   principalId,
                   principalHash,
                   startedAt,
-                  true,
                 ),
               }
             : {
                 action: "putIfUnchanged",
-                value: newRevocationRecord(
+                value: beginRevocationRecord(
                   principalId,
                   principalHash,
                   startedAt,
-                  true,
                   revocation,
                 ),
                 version: state.version,
@@ -544,11 +584,10 @@ export function createSessionStore(
         const outcome = await sessions.transact(SESSION_PARTITION, [
           {
             action: "putIfUnchanged",
-            value: newRevocationRecord(
+            value: finishRevocationRecord(
               principalId,
               principalHash,
               laterTimestamp(startedAt, clock.now()),
-              false,
               revocation,
             ),
             version: state.version,
