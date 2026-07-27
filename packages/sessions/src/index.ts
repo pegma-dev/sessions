@@ -458,9 +458,7 @@ export function createSessionStore(
         const revocation = state === null ? undefined : state.value;
         if (
           revocation !== undefined &&
-          ((revocation.revoking &&
-            timestamp(record.createdAt) <
-              timestamp(revocation.leaseExpiresAt)) ||
+          (revocation.revoking ||
             timestamp(record.createdAt) <= timestamp(revocation.revokedThrough))
         ) {
           throw new Error("Session issuance overlapped principal revocation.");

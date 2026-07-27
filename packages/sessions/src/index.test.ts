@@ -387,6 +387,9 @@ for (const backend of backends) {
         leaseExpiresAt: "2026-07-27T11:59:59.000Z",
       });
 
+      await expect(
+        sessions.create("stranded-revocation-blocked", NEW_SESSION),
+      ).rejects.toThrow("Session issuance overlapped principal revocation.");
       expect(await sessions.destroyAllForPrincipal(PRINCIPAL)).toBe(1);
       const issuerAfterRecovery = createSessionStore(inspected.store, {
         clock: fixedClock("2026-07-27T12:00:00.001Z"),
