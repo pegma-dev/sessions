@@ -293,7 +293,7 @@ a consumer measures it.
 
 ## Near-term backlog
 
-1. Phase 1 is shipped on `main`; do not keep dispatching record-store
+1. Phase 1 is merged on `main`; do not keep dispatching record-store
    extraction work from this plan.
 2. Keep Phase 2 gated until RetireGolden's storage migration finishes its
    stage-soak week and reaches production (currently targeted for
