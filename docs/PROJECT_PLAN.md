@@ -2,10 +2,11 @@
 
 ## Status
 
-**Stage:** Phase 1 implemented on the first delivery branch
-(`0.x`, public API unstable, unpublished). When this pull request merges, the
-record store, package scaffolding, and memory/Azurite race suite described
-below are the repository baseline.
+**Stage:** Phase 1 is merged on `main`
+([PR #1](https://github.com/pegma-dev/sessions/pull/1),
+`f5ea435`, 2026-07-27). The record store, package scaffolding, and
+memory/Azurite race suite described below are the repository baseline.
+`@pegma/sessions` remains `0.x`, public API unstable, and unpublished.
 
 **Initial reference application:** RetireGolden, whose account API carries the
 production-tested implementation this component is extracted from
@@ -226,14 +227,15 @@ paper over it.
 
 ## Delivery phases
 
-### Phase 1 — the record store, implemented
+### Phase 1 — the record store, merged
 
-This branch extracts the store half of the reference implementation into TypeScript
+Merged in [PR #1](https://github.com/pegma-dev/sessions/pull/1). This phase
+extracted the store half of the reference implementation into TypeScript
 against spine and storage-core: the port above, mandatory hashing, the
 liveness predicate, the host data field, and the full race-test suite over
 memory and real Azurite. The cookie/OIDC halves of the reference file
-explicitly stay behind. Exit: suite green both ways, README leading with
-what the component is not (an auth solution).
+explicitly stayed behind. Exit was met: the suite was green both ways, and
+the README leads with what the component is not (an auth solution).
 
 ### Phase 2 — first consumer
 
@@ -291,8 +293,8 @@ a consumer measures it.
 
 ## Near-term backlog
 
-1. Merge Phase 1 after its package, SHA-pinned workflows, and full
-   memory/Azurite suite pass the repository gate.
+1. Phase 1 is shipped on `main`; do not keep dispatching record-store
+   extraction work from this plan.
 2. Keep Phase 2 gated until RetireGolden's storage migration finishes its
    stage-soak week and reaches production (currently targeted for
    approximately 2026-08-03). Do not change the code under soak.
