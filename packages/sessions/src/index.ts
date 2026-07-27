@@ -19,6 +19,9 @@ const DEFAULT_ABSOLUTE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 const NO_PRINCIPAL_REVOCATION = "0000-01-01T00:00:00.000Z" as IsoTimestamp;
 const MAX_REVOCATION_TRANSACTION_ATTEMPTS = 8;
+const REVOCATION_GUARD_LEASE_MS = 60 * 60 * 1000;
+const CANONICAL_ISO_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 /** The caller-owned fields from which a session record is created. */
 export interface NewSession {
@@ -79,6 +82,7 @@ interface PrincipalRevocationRecord {
   readonly principalId: PrincipalId;
   readonly revoking: boolean;
   readonly activeRevocations: number;
+  readonly leaseExpiresAt: IsoTimestamp;
   readonly revokedThrough: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
 }
@@ -119,6 +123,7 @@ const sessionCollection = defineCollection<StoredSessionEntry>({
             principalId: value.principalId,
             revoking: String(value.revoking),
             activeRevocations: String(value.activeRevocations),
+            leaseExpiresAt: value.leaseExpiresAt,
             revokedThrough: value.revokedThrough,
             updatedAt: value.updatedAt,
           }),
@@ -131,6 +136,9 @@ const sessionCollection = defineCollection<StoredSessionEntry>({
           principalId: String(record["principalId"] ?? "") as PrincipalId,
           revoking: String(record["revoking"] ?? "") === "true",
           activeRevocations: Number(record["activeRevocations"] ?? 0),
+          leaseExpiresAt: String(
+            record["leaseExpiresAt"] ?? NO_PRINCIPAL_REVOCATION,
+          ),
           revokedThrough: String(record["revokedThrough"] ?? ""),
           updatedAt: String(record["updatedAt"] ?? ""),
         };
@@ -171,6 +179,7 @@ function checkedRevocationState(
   }
   if (
     !Number.isFinite(timestamp(state.value.revokedThrough)) ||
+    !Number.isFinite(timestamp(state.value.leaseExpiresAt)) ||
     !Number.isFinite(timestamp(state.value.updatedAt))
   ) {
     throw new Error("Stored session revocation state is invalid.");
@@ -203,7 +212,18 @@ function positiveFinite(value: number, name: string): number {
 }
 
 function timestamp(value: IsoTimestamp): number {
-  return Date.parse(value);
+  if (!CANONICAL_ISO_TIMESTAMP.test(value)) {
+    return Number.NaN;
+  }
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) {
+    return Number.NaN;
+  }
+  try {
+    return new Date(at).toISOString() === value ? at : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
 }
 
 function isoTimestamp(value: IsoTimestamp, message: string): IsoTimestamp {
@@ -231,6 +251,19 @@ function laterTimestamp(
     return first;
   }
   return new Date(Math.max(firstAt, secondAt)).toISOString();
+}
+
+function timestampPlus(value: IsoTimestamp, ms: number): IsoTimestamp {
+  const at = timestamp(value);
+  const later = at + ms;
+  if (!Number.isFinite(at) || !Number.isFinite(later)) {
+    throw new Error("Clock returned an invalid timestamp.");
+  }
+  try {
+    return new Date(later).toISOString();
+  } catch {
+    throw new Error("Session timestamps are outside the supported date range.");
+  }
 }
 
 async function retryRevocationTransaction(attempt: number): Promise<void> {
@@ -325,6 +358,7 @@ function initialRevocationRecord(
     principalId,
     revoking: false,
     activeRevocations: 0,
+    leaseExpiresAt: NO_PRINCIPAL_REVOCATION,
     revokedThrough: NO_PRINCIPAL_REVOCATION,
     updatedAt,
   };
@@ -337,12 +371,19 @@ function beginRevocationRecord(
   previous?: PrincipalRevocationRecord,
 ): PrincipalRevocationRecord {
   const updatedAt = isoTimestamp(now, "Clock returned an invalid timestamp.");
+  const previousLeaseExpired =
+    previous === undefined ||
+    timestamp(updatedAt) >= timestamp(previous.leaseExpiresAt);
+  const activeRevocations = previousLeaseExpired
+    ? 1
+    : previous.activeRevocations + 1;
   return {
     kind: "principalRevocation",
     principalHash,
     principalId,
     revoking: true,
-    activeRevocations: (previous?.activeRevocations ?? 0) + 1,
+    activeRevocations,
+    leaseExpiresAt: timestampPlus(updatedAt, REVOCATION_GUARD_LEASE_MS),
     revokedThrough:
       previous === undefined
         ? updatedAt
@@ -359,12 +400,19 @@ function finishRevocationRecord(
 ): PrincipalRevocationRecord {
   const updatedAt = isoTimestamp(now, "Clock returned an invalid timestamp.");
   const activeRevocations = Math.max(0, previous.activeRevocations - 1);
+  const revoking = activeRevocations > 0;
   return {
     kind: "principalRevocation",
     principalHash,
     principalId,
-    revoking: activeRevocations > 0,
+    revoking,
     activeRevocations,
+    leaseExpiresAt: revoking
+      ? laterTimestamp(
+          previous.leaseExpiresAt,
+          timestampPlus(updatedAt, REVOCATION_GUARD_LEASE_MS),
+        )
+      : NO_PRINCIPAL_REVOCATION,
     revokedThrough: laterTimestamp(previous.revokedThrough, updatedAt),
     updatedAt,
   };
@@ -410,7 +458,9 @@ export function createSessionStore(
         const revocation = state === null ? undefined : state.value;
         if (
           revocation !== undefined &&
-          (revocation.revoking ||
+          ((revocation.revoking &&
+            timestamp(record.createdAt) <
+              timestamp(revocation.leaseExpiresAt)) ||
             timestamp(record.createdAt) <= timestamp(revocation.revokedThrough))
         ) {
           throw new Error("Session issuance overlapped principal revocation.");

@@ -53,6 +53,7 @@ interface StoredRevocationFixture {
   readonly principalId: PrincipalId;
   readonly revoking: boolean;
   readonly activeRevocations: number;
+  readonly leaseExpiresAt: string;
   readonly revokedThrough: string;
   readonly updatedAt: string;
 }
@@ -295,6 +296,7 @@ for (const backend of backends) {
       await sessions.create("invalid-now", NEW_SESSION);
       await sessions.create("invalid-expiry", NEW_SESSION);
       await sessions.create("invalid-idle", NEW_SESSION);
+      await sessions.create("normalized-expiry", NEW_SESSION);
 
       expect(await sessions.get("invalid-now", "not-a-time")).toBeNull();
 
@@ -302,17 +304,26 @@ for (const backend of backends) {
       const stored = storedSessions(await records.list("session"));
       const expiryKey = await sha256("invalid-expiry");
       const idleKey = await sha256("invalid-idle");
+      const normalizedKey = await sha256("normalized-expiry");
       const expiryRecord = stored.find(
         (value) => value.idHash === expiryKey,
       ) as StoredSessionFixture;
       const idleRecord = stored.find(
         (value) => value.idHash === idleKey,
       ) as StoredSessionFixture;
+      const normalizedRecord = stored.find(
+        (value) => value.idHash === normalizedKey,
+      ) as StoredSessionFixture;
       await records.put({ ...expiryRecord, expiresAt: "Infinity" });
       await records.put({ ...idleRecord, lastSeenAt: "NaN" });
+      await records.put({
+        ...normalizedRecord,
+        expiresAt: "2026-07-32T12:00:00.000Z",
+      });
 
       expect(await sessions.get("invalid-expiry", NOW)).toBeNull();
       expect(await sessions.get("invalid-idle", NOW)).toBeNull();
+      expect(await sessions.get("normalized-expiry", NOW)).toBeNull();
 
       await sessions.create("invalid-purge-now", NEW_SESSION);
       expect(await sessions.purgeExpired("still-not-a-time")).toBe(1);
@@ -358,6 +369,31 @@ for (const backend of backends) {
       await expect(
         sessions.create("malformed-revocation-new", NEW_SESSION),
       ).rejects.toThrow("Stored session revocation state is invalid.");
+    });
+
+    it("recovers an expired stranded revocation guard", async () => {
+      const inspected = inspectStorage(backend.freshStore());
+      const sessions = createSessionStore(inspected.store, {
+        clock: fixedClock(NOW),
+      });
+      await sessions.create("stranded-revocation-old", NEW_SESSION);
+
+      const records = inspected.records();
+      const [revocation] = storedRevocations(await records.list("session"));
+      await records.put({
+        ...(revocation as StoredRevocationFixture),
+        revoking: true,
+        activeRevocations: 1,
+        leaseExpiresAt: "2026-07-27T11:59:59.000Z",
+      });
+
+      expect(await sessions.destroyAllForPrincipal(PRINCIPAL)).toBe(1);
+      const issuerAfterRecovery = createSessionStore(inspected.store, {
+        clock: fixedClock("2026-07-27T12:00:00.001Z"),
+      });
+      await expect(
+        issuerAfterRecovery.create("stranded-revocation-new", NEW_SESSION),
+      ).resolves.toMatchObject(NEW_SESSION);
     });
 
     it("fails closed instead of moving the idle anchor backward", async () => {
