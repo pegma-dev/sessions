@@ -36,6 +36,46 @@ async function waitForPort(port: number, timeoutMs: number): Promise<void> {
   );
 }
 
+async function waitForChildStartup(
+  process: ChildProcess,
+  port: number,
+  timeoutMs: number,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      process.off("error", onError);
+      process.off("exit", onExit);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup();
+      reject(
+        new Error(
+          `Azurite exited before listening on port ${port} (code ${String(
+            code,
+          )}, signal ${String(signal)}).`,
+        ),
+      );
+    };
+
+    process.once("error", onError);
+    process.once("exit", onExit);
+    waitForPort(port, timeoutMs).then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function setup(): Promise<void> {
   const entry = join(
     process.cwd(),
@@ -68,11 +108,7 @@ export async function setup(): Promise<void> {
     { stdio: "ignore" },
   );
 
-  child.once("error", (error) => {
-    throw error;
-  });
-
-  await waitForPort(TABLE_PORT, 30_000);
+  await waitForChildStartup(child, TABLE_PORT, 30_000);
 }
 
 export async function teardown(): Promise<void> {

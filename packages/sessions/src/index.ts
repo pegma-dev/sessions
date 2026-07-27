@@ -18,6 +18,7 @@ const SESSION_PARTITION = "session";
 const DEFAULT_ABSOLUTE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 const NO_PRINCIPAL_REVOCATION = "0000-01-01T00:00:00.000Z" as IsoTimestamp;
+const MAX_REVOCATION_TRANSACTION_ATTEMPTS = 8;
 
 /** The caller-owned fields from which a session record is created. */
 export interface NewSession {
@@ -165,6 +166,12 @@ function checkedRevocationState(
   if (!isPrincipalRevocationRecord(state.value)) {
     throw new Error("Stored session revocation state is invalid.");
   }
+  if (
+    !Number.isFinite(timestamp(state.value.revokedThrough)) ||
+    !Number.isFinite(timestamp(state.value.updatedAt))
+  ) {
+    throw new Error("Stored session revocation state is invalid.");
+  }
   return { value: state.value, version: state.version };
 }
 
@@ -214,6 +221,16 @@ function laterTimestamp(
     return first;
   }
   return new Date(Math.max(firstAt, secondAt)).toISOString();
+}
+
+async function retryRevocationTransaction(attempt: number): Promise<void> {
+  await new Promise((resolve) =>
+    setTimeout(resolve, Math.min(50, attempt * 5) + Math.random() * 5),
+  );
+}
+
+function throwRevocationTransactionLimit(): never {
+  throw new Error("Session revocation state changed too many times.");
 }
 
 /**
@@ -339,7 +356,12 @@ export function createSessionStore(
       const principalHash = await hashPrincipalId(session.principalId);
       const stateKey = principalRevocationKey(principalHash);
 
-      for (;;) {
+      let markedRevoking = false;
+      for (
+        let attempt = 1;
+        attempt <= MAX_REVOCATION_TRANSACTION_ATTEMPTS;
+        attempt += 1
+      ) {
         const state = checkedRevocationState(
           await sessions.getVersioned(stateKey),
         );
@@ -385,12 +407,16 @@ export function createSessionStore(
           throw new Error("Session id collision.");
         }
         if (outcome.failedAction === 0) {
+          await retryRevocationTransaction(attempt);
           continue;
         }
         if (outcome.reason === "exists") {
+          await retryRevocationTransaction(attempt);
           continue;
         }
+        throwRevocationTransactionLimit();
       }
+      throwRevocationTransactionLimit();
     },
 
     async get(sessionId, now = clock.now()) {
@@ -447,7 +473,12 @@ export function createSessionStore(
         "Clock returned an invalid timestamp.",
       );
 
-      for (;;) {
+      let markedRevoking = false;
+      for (
+        let attempt = 1;
+        attempt <= MAX_REVOCATION_TRANSACTION_ATTEMPTS;
+        attempt += 1
+      ) {
         const state = checkedRevocationState(
           await sessions.getVersioned(stateKey),
         );
@@ -476,8 +507,13 @@ export function createSessionStore(
               },
         ]);
         if (outcome.committed) {
+          markedRevoking = true;
           break;
         }
+        await retryRevocationTransaction(attempt);
+      }
+      if (!markedRevoking) {
+        throwRevocationTransactionLimit();
       }
 
       let destroyed = 0;
@@ -493,7 +529,12 @@ export function createSessionStore(
         }
       }
 
-      for (;;) {
+      let clearedRevoking = false;
+      for (
+        let attempt = 1;
+        attempt <= MAX_REVOCATION_TRANSACTION_ATTEMPTS;
+        attempt += 1
+      ) {
         const state = checkedRevocationState(
           await sessions.getVersioned(stateKey),
         );
@@ -515,8 +556,13 @@ export function createSessionStore(
           },
         ]);
         if (outcome.committed) {
+          clearedRevoking = true;
           break;
         }
+        await retryRevocationTransaction(attempt);
+      }
+      if (!clearedRevoking) {
+        throwRevocationTransactionLimit();
       }
 
       logger.log("info", "Sessions revoked", { destroyed });

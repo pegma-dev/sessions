@@ -66,6 +66,15 @@ function storedSessions(
   );
 }
 
+function storedRevocations(
+  records: readonly StoredFixture[],
+): StoredRevocationFixture[] {
+  return records.filter(
+    (record): record is StoredRevocationFixture =>
+      record.kind === "principalRevocation",
+  );
+}
+
 function inspectStorage(base: Store): {
   readonly store: Store;
   records(): CollectionStore<StoredFixture>;
@@ -329,6 +338,25 @@ for (const backend of backends) {
       ).toBeNull();
       expect(await sessions.purgeExpired("2026-07-27T12:00:02.000Z")).toBe(0);
       expect(storedSessions(await records.list("session"))).toHaveLength(0);
+    });
+
+    it("fails closed on malformed revocation timestamps", async () => {
+      const inspected = inspectStorage(backend.freshStore());
+      const sessions = createSessionStore(inspected.store, {
+        clock: fixedClock(NOW),
+      });
+      await sessions.create("malformed-revocation-seed", NEW_SESSION);
+
+      const records = inspected.records();
+      const [revocation] = storedRevocations(await records.list("session"));
+      await records.put({
+        ...(revocation as StoredRevocationFixture),
+        revokedThrough: "not-a-time",
+      });
+
+      await expect(
+        sessions.create("malformed-revocation-new", NEW_SESSION),
+      ).rejects.toThrow("Stored session revocation state is invalid.");
     });
 
     it("fails closed instead of moving the idle anchor backward", async () => {
