@@ -53,6 +53,7 @@ interface StoredRevocationFixture {
   readonly principalId: PrincipalId;
   readonly revoking: boolean;
   readonly activeRevocations: number;
+  readonly revocationToken: string;
   readonly leaseExpiresAt: string;
   readonly revokedThrough: string;
   readonly updatedAt: string;
@@ -384,6 +385,7 @@ for (const backend of backends) {
         ...(revocation as StoredRevocationFixture),
         revoking: true,
         activeRevocations: 1,
+        revocationToken: "stranded-token",
         leaseExpiresAt: "2026-07-27T11:59:59.000Z",
       });
 
@@ -718,55 +720,53 @@ for (const backend of backends) {
       ).resolves.toMatchObject(NEW_SESSION);
     });
 
-    it("keeps the create guard active across overlapping principal revocations", async () => {
+    it("rejects overlapping principal revocation while a guard lease is active", async () => {
       const base = backend.freshStore();
-      let secondRevoker: ReturnType<typeof createSessionStore>;
-      let secondRevocation: Promise<number> | undefined;
-      let secondListEntered!: () => void;
-      let releaseSecondList!: () => void;
-      const secondListStarted = new Promise<void>((resolve) => {
-        secondListEntered = resolve;
+      let firstListEntered!: () => void;
+      let releaseFirstList!: () => void;
+      const firstListStarted = new Promise<void>((resolve) => {
+        firstListEntered = resolve;
       });
-      const secondListRelease = new Promise<void>((resolve) => {
-        releaseSecondList = resolve;
+      const firstListRelease = new Promise<void>((resolve) => {
+        releaseFirstList = resolve;
       });
-      let startedSecondRevocation = false;
       const wrapped = wrapSessionCollection(base, (collection) => ({
         ...collection,
         async list(partition) {
           const listed = await collection.list(partition);
-          if (!startedSecondRevocation) {
-            startedSecondRevocation = true;
-            secondRevocation = secondRevoker.destroyAllForPrincipal(PRINCIPAL);
-            await secondListStarted;
-            return listed;
-          }
-          secondListEntered();
-          await secondListRelease;
+          firstListEntered();
+          await firstListRelease;
           return listed;
         },
       }));
       const firstRevoker = createSessionStore(wrapped, {
         clock: fixedClock(NOW),
       });
-      secondRevoker = createSessionStore(wrapped, {
-        clock: fixedClock("2026-07-27T12:00:00.001Z"),
-      });
-      const issuerDuringOverlap = createSessionStore(wrapped, {
+      const replacementRevoker = createSessionStore(wrapped, {
         clock: fixedClock("2026-07-27T12:00:00.002Z"),
+      });
+      const issuerDuringReplacement = createSessionStore(wrapped, {
+        clock: fixedClock("2026-07-27T12:00:00.003Z"),
       });
       await firstRevoker.create("overlapping-revocation-old", NEW_SESSION);
 
-      expect(await firstRevoker.destroyAllForPrincipal(PRINCIPAL)).toBe(1);
+      const firstRevocation = firstRevoker.destroyAllForPrincipal(PRINCIPAL);
+      await firstListStarted;
       await expect(
-        issuerDuringOverlap.create("overlapping-revocation-new", NEW_SESSION),
+        replacementRevoker.destroyAllForPrincipal(PRINCIPAL),
+      ).rejects.toThrow("Session revocation state changed too many times.");
+      await expect(
+        issuerDuringReplacement.create(
+          "overlapping-revocation-new",
+          NEW_SESSION,
+        ),
       ).rejects.toThrow("Session issuance overlapped principal revocation.");
 
-      releaseSecondList();
-      await expect(secondRevocation).resolves.toBe(0);
+      releaseFirstList();
+      await expect(firstRevocation).resolves.toBe(1);
 
       const issuerAfterOverlap = createSessionStore(wrapped, {
-        clock: fixedClock("2026-07-27T12:00:00.003Z"),
+        clock: fixedClock("2026-07-27T12:00:00.004Z"),
       });
       await expect(
         issuerAfterOverlap.create("overlapping-revocation-after", NEW_SESSION),
