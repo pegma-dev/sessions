@@ -2,13 +2,16 @@
 
 ## Status
 
-**Stage:** planning; nothing extracted yet
-(`0.x`, public API unstable, unpublished)
+**Stage:** Phase 1 implemented on the first delivery branch
+(`0.x`, public API unstable, unpublished). When this pull request merges, the
+record store, package scaffolding, and memory/Azurite race suite described
+below are the repository baseline.
 
 **Initial reference application:** RetireGolden, whose account API carries the
 production-tested implementation this component is extracted from
-(`api/src/lib/session.js` — the session-store half of a BFF web session,
-hardened on stage by real login traffic).
+([`retiregolden.org/api/src/lib/session.js`](https://github.com/RetireGolden/retiregolden.org/blob/main/api/src/lib/session.js)
+— the session-store half of a BFF web session, hardened on stage by real login
+traffic).
 
 **License:** MIT
 
@@ -81,9 +84,9 @@ flattened; the component never inspects it).
 
 One predicate answers "is this record live at this instant?", enforcing both
 the absolute expiry and the idle timeout, with malformed or non-finite
-timestamps failing closed as dead. The read path, the sweep, and nothing
-else: every consumer of "is it alive" goes through the same function, so the
-two can never disagree.
+timestamps and future idle anchors failing closed as dead. The read path, the
+sweep, and nothing else: every consumer of "is it alive" goes through the
+same function, so the two can never disagree.
 
 ### The port
 
@@ -99,6 +102,8 @@ two can never disagree.
 - `destroyAllForPrincipal(principalId)` — sign out everywhere. Lists the
   partition and filters on the record's principal; deletes are deliberately
   **unconditional**, because a session touched concurrently must still die.
+  A per-principal revocation guard row refuses creates that overlap the
+  revocation window, so revocation is not limited to one list snapshot.
 - `purgeExpired(now?)` — versioned sweep of dead rows the lazy purge never
   saw; a session touched after enumeration (live again) fails its
   conditional delete and survives.
@@ -141,7 +146,7 @@ must enumerate every session, which storage-core does per-partition.
 client-side. That is the same I/O the reference implementation's server-side
 filter produced anyway (a non-indexed filter is a partition scan wherever it
 runs), but it sets a scale envelope: the store is right for hosts whose
-*live-session count* is bounded — thousands, not millions. A principal index
+_live-session count_ is bounded — thousands, not millions. A principal index
 is deliberately not built: it adds a write to the hot path and fixes neither
 the sweep nor the read. Documented, revisited only with a real consumer over
 the envelope.
@@ -151,8 +156,11 @@ the envelope.
 The two delete paths have opposite correctness rules, and keeping them
 opposite is the design. `destroyAllForPrincipal` must kill a session even if
 it was touched mid-enumeration — revocation wins races. `purgeExpired` must
-*not* kill a session touched mid-enumeration — hygiene loses races. An
+_not_ kill a session touched mid-enumeration — hygiene loses races. An
 implementation that unifies them gets one of the two wrong.
+The per-principal revocation guard is part of the same invariant: a create
+that races the revocation window is refused instead of surviving behind an
+old list snapshot.
 
 ### Reads garbage-collect, and never resurrect
 
@@ -179,7 +187,8 @@ counts, revocation counts) report through the spine `Logger` port.
 - The host data field with a host-supplied codec fragment.
 - Conformance-style tests over `createMemoryStore()` and against the Azure
   Tables adapter (real Azurite, per ecosystem rule) — including the race
-  tests: touch-vs-destroy, sweep-vs-revival, revocation-vs-touch.
+  tests: touch-vs-destroy, sweep-vs-revival, revocation-vs-touch, and
+  revocation-vs-create.
 
 ### Non-goals
 
@@ -217,9 +226,9 @@ paper over it.
 
 ## Delivery phases
 
-### Phase 1 — the record store, extracted
+### Phase 1 — the record store, implemented
 
-Extract the store half of the reference implementation into TypeScript
+This branch extracts the store half of the reference implementation into TypeScript
 against spine and storage-core: the port above, mandatory hashing, the
 liveness predicate, the host data field, and the full race-test suite over
 memory and real Azurite. The cookie/OIDC halves of the reference file
@@ -255,7 +264,7 @@ permitted until real consumers say otherwise.
 ## Open questions
 
 **`listForPrincipal`.** An "active sessions" screen (show the user their
-devices, revoke one) needs to *read* a principal's sessions, and the scan
+devices, revoke one) needs to _read_ a principal's sessions, and the scan
 that powers `destroyAllForPrincipal` could just as well return them. Lean
 **yes, eventually** — same I/O, real product need, and refusing it invites
 hosts to reimplement the scan wrong — but not until a consumer actually
@@ -263,11 +272,10 @@ builds that screen (Phase 3 at the earliest). It would surface hashed ids
 only; the raw id of any session other than the caller's own is unknowable by
 design, so revoking a listed session works by hash, not by id.
 
-**Host data: one encoded field vs. host-extended codec.** The plan says one
-encoded field (audit precedent, crisp boundary). The alternative — letting
-the host contribute codec fields into the component's collection — reads
-better in the host's code but dissolves the boundary that keeps the
-component ignorant of host data. Decide finally in Phase 1; lean encoded.
+**Host data: resolved in Phase 1.** The public record has one encoded `data`
+field (audit precedent, crisp boundary). Letting the host contribute codec
+fields into the component's collection would read better in host code but
+dissolve the boundary that keeps the component ignorant of host data.
 
 **Anonymous sessions.** Carts and previews want session records before any
 principal exists. `PrincipalId` would become nullable and
@@ -283,9 +291,10 @@ a consumer measures it.
 
 ## Near-term backlog
 
-1. Repository scaffolding to the ecosystem standard (package, tsconfig set,
-   vitest, SHA-pinned CI, publish.yml).
-2. Phase 1 extraction with the race-test suite.
-3. A README front section that says "not an auth solution" before it says
-   anything else.
-4. Coordinate Phase 2 timing against RetireGolden's storage-soak calendar.
+1. Merge Phase 1 after its package, SHA-pinned workflows, and full
+   memory/Azurite suite pass the repository gate.
+2. Keep Phase 2 gated until RetireGolden's storage migration finishes its
+   stage-soak week and reaches production (currently targeted for
+   approximately 2026-08-03). Do not change the code under soak.
+3. After that gate closes, replace only RetireGolden's session-store internals;
+   its cookies, CSRF, OIDC, and HTTP behavior remain host code.

@@ -32,7 +32,9 @@ timestamps fail closed as dead.
 
 **The two delete paths have opposite rules — keep them opposite.**
 Revocation (`destroy`, `destroyAllForPrincipal`) deletes unconditionally: it
-must win races against concurrent touches. The hygiene sweep deletes
+must win races against concurrent touches. Principal-wide revocation also uses
+its guard row to reject creates that overlap the revocation window; do not
+replace that with a list-only implementation. The hygiene sweep deletes
 version-conditionally: it must lose races against concurrent revival. A
 refactor that unifies them breaks one of the two.
 

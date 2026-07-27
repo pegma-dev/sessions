@@ -1,0 +1,548 @@
+import {
+  noopLogger,
+  systemClock,
+  type Clock,
+  type IsoTimestamp,
+  type Logger,
+  type PrincipalId,
+} from "@pegma/spine";
+import {
+  defineCollection,
+  type EntityKey,
+  type Store,
+  type StoredRecord,
+  type VersionedRecord,
+} from "@pegma/storage-core";
+
+const SESSION_PARTITION = "session";
+const DEFAULT_ABSOLUTE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_IDLE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
+const NO_PRINCIPAL_REVOCATION = "0000-01-01T00:00:00.000Z" as IsoTimestamp;
+
+/** The caller-owned fields from which a session record is created. */
+export interface NewSession {
+  readonly principalId: PrincipalId;
+  /** Opaque, host-encoded data. This package never inspects it. */
+  readonly data: string;
+}
+
+/** A live or stored server-side session, without its credential-derived key. */
+export interface SessionRecord extends NewSession {
+  readonly createdAt: IsoTimestamp;
+  /** Absolute boundary. The session is dead at this instant, not after it. */
+  readonly expiresAt: IsoTimestamp;
+  /** Idle-timeout anchor, advanced best-effort by successful reads. */
+  readonly lastSeenAt: IsoTimestamp;
+}
+
+/** Operations over server-side session records. */
+export interface SessionStore {
+  /** Creates a record under a SHA-256 hash of `sessionId`. */
+  create(sessionId: string, session: NewSession): Promise<SessionRecord>;
+
+  /**
+   * Returns the initially validated record when live, otherwise null.
+   *
+   * The idle touch is best-effort. The returned record deliberately does not
+   * claim that touch succeeded.
+   */
+  get(sessionId: string, now?: IsoTimestamp): Promise<SessionRecord | null>;
+
+  /** Idempotently revokes one session. */
+  destroy(sessionId: string): Promise<void>;
+
+  /** Revokes every session owned by `principalId`. */
+  destroyAllForPrincipal(principalId: PrincipalId): Promise<number>;
+
+  /** Conditionally removes records that are dead at `now`. */
+  purgeExpired(now?: IsoTimestamp): Promise<number>;
+}
+
+export interface SessionStoreOptions {
+  readonly clock?: Clock;
+  readonly logger?: Logger;
+  /** Defaults to seven days. Must be positive and finite. */
+  readonly absoluteLifetimeMs?: number;
+  /** Defaults to twelve hours. Must be positive and finite. */
+  readonly idleTimeoutMs?: number;
+}
+
+interface StoredSessionRecord extends SessionRecord {
+  readonly kind: "session";
+  readonly idHash: string;
+}
+
+interface PrincipalRevocationRecord {
+  readonly kind: "principalRevocation";
+  readonly principalHash: string;
+  readonly principalId: PrincipalId;
+  readonly revoking: boolean;
+  readonly revokedThrough: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
+}
+
+type StoredSessionEntry = StoredSessionRecord | PrincipalRevocationRecord;
+
+function sessionKey(idHash: string): EntityKey {
+  return { partition: SESSION_PARTITION, id: `session:${idHash}` };
+}
+
+function principalRevocationKey(principalHash: string): EntityKey {
+  return {
+    partition: SESSION_PARTITION,
+    id: `principal-revocation:${principalHash}`,
+  };
+}
+
+const sessionCollection = defineCollection<StoredSessionEntry>({
+  name: "sessions",
+  key: (value) =>
+    value.kind === "session"
+      ? sessionKey(value.idHash)
+      : principalRevocationKey(value.principalHash),
+  codec: {
+    encode: (value): StoredRecord => ({
+      kind: value.kind,
+      ...(value.kind === "session"
+        ? {
+            idHash: value.idHash,
+            principalId: value.principalId,
+            data: value.data,
+            createdAt: value.createdAt,
+            expiresAt: value.expiresAt,
+            lastSeenAt: value.lastSeenAt,
+          }
+        : {
+            principalHash: value.principalHash,
+            principalId: value.principalId,
+            revoking: String(value.revoking),
+            revokedThrough: value.revokedThrough,
+            updatedAt: value.updatedAt,
+          }),
+    }),
+    decode: (record) => {
+      if (String(record["kind"] ?? "session") === "principalRevocation") {
+        return {
+          kind: "principalRevocation",
+          principalHash: String(record["principalHash"] ?? ""),
+          principalId: String(record["principalId"] ?? "") as PrincipalId,
+          revoking: String(record["revoking"] ?? "") === "true",
+          revokedThrough: String(record["revokedThrough"] ?? ""),
+          updatedAt: String(record["updatedAt"] ?? ""),
+        };
+      }
+      return {
+        kind: "session",
+        idHash: String(record["idHash"] ?? ""),
+        principalId: String(record["principalId"] ?? "") as PrincipalId,
+        data: String(record["data"] ?? ""),
+        createdAt: String(record["createdAt"] ?? ""),
+        expiresAt: String(record["expiresAt"] ?? ""),
+        lastSeenAt: String(record["lastSeenAt"] ?? ""),
+      };
+    },
+  },
+});
+
+function isSessionRecord(
+  record: StoredSessionEntry,
+): record is StoredSessionRecord {
+  return record.kind === "session";
+}
+
+function isPrincipalRevocationRecord(
+  record: StoredSessionEntry,
+): record is PrincipalRevocationRecord {
+  return record.kind === "principalRevocation";
+}
+
+function checkedRevocationState(
+  state: VersionedRecord<StoredSessionEntry> | null,
+): VersionedRecord<PrincipalRevocationRecord> | null {
+  if (state === null) {
+    return null;
+  }
+  if (!isPrincipalRevocationRecord(state.value)) {
+    throw new Error("Stored session revocation state is invalid.");
+  }
+  return { value: state.value, version: state.version };
+}
+
+function publicRecord(record: StoredSessionRecord): SessionRecord {
+  return {
+    principalId: record.principalId,
+    data: record.data,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+    lastSeenAt: record.lastSeenAt,
+  };
+}
+
+function positiveFinite(value: number, name: string): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive finite number.`);
+  }
+  return value;
+}
+
+function timestamp(value: IsoTimestamp): number {
+  return Date.parse(value);
+}
+
+function isoTimestamp(value: IsoTimestamp, message: string): IsoTimestamp {
+  const at = timestamp(value);
+  if (!Number.isFinite(at)) {
+    throw new Error(message);
+  }
+  try {
+    return new Date(at).toISOString();
+  } catch {
+    throw new Error("Session timestamps are outside the supported date range.");
+  }
+}
+
+function laterTimestamp(
+  first: IsoTimestamp,
+  second: IsoTimestamp,
+): IsoTimestamp {
+  const firstAt = timestamp(first);
+  const secondAt = timestamp(second);
+  if (!Number.isFinite(firstAt)) {
+    return second;
+  }
+  if (!Number.isFinite(secondAt)) {
+    return first;
+  }
+  return new Date(Math.max(firstAt, secondAt)).toISOString();
+}
+
+/**
+ * The only liveness predicate.
+ *
+ * Both the hot read and the hygiene sweep call this function. Invalid time
+ * from either the clock or storage fails closed.
+ */
+function isLive(
+  record: SessionRecord,
+  now: IsoTimestamp,
+  idleTimeoutMs: number,
+): boolean {
+  const at = timestamp(now);
+  const expires = timestamp(record.expiresAt);
+  const lastSeen = timestamp(record.lastSeenAt);
+  return (
+    Number.isFinite(at) &&
+    Number.isFinite(expires) &&
+    Number.isFinite(lastSeen) &&
+    lastSeen <= at &&
+    at < expires &&
+    at - lastSeen < idleTimeoutMs
+  );
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function hashSessionId(sessionId: string): Promise<string> {
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    throw new Error("Session id must be a non-empty string.");
+  }
+  return sha256Hex(sessionId);
+}
+
+async function hashPrincipalId(principalId: PrincipalId): Promise<string> {
+  return sha256Hex(principalId);
+}
+
+function createdRecord(
+  session: NewSession,
+  now: IsoTimestamp,
+  absoluteLifetimeMs: number,
+): SessionRecord {
+  const at = timestamp(now);
+  const expires = at + absoluteLifetimeMs;
+  if (!Number.isFinite(at) || !Number.isFinite(expires)) {
+    throw new Error("Clock returned an invalid timestamp.");
+  }
+
+  let expiresAt: IsoTimestamp;
+  try {
+    expiresAt = new Date(expires).toISOString();
+  } catch {
+    throw new Error("Session timestamps are outside the supported date range.");
+  }
+
+  return Object.freeze({
+    principalId: session.principalId,
+    data: session.data,
+    createdAt: new Date(at).toISOString(),
+    expiresAt,
+    lastSeenAt: new Date(at).toISOString(),
+  });
+}
+
+function newRevocationRecord(
+  principalId: PrincipalId,
+  principalHash: string,
+  now: IsoTimestamp,
+  revoking: boolean,
+  previous?: PrincipalRevocationRecord,
+): PrincipalRevocationRecord {
+  const updatedAt = isoTimestamp(now, "Clock returned an invalid timestamp.");
+  const revokedThrough =
+    previous === undefined
+      ? revoking
+        ? updatedAt
+        : NO_PRINCIPAL_REVOCATION
+      : laterTimestamp(previous.revokedThrough, updatedAt);
+  return {
+    kind: "principalRevocation",
+    principalHash,
+    principalId,
+    revoking,
+    revokedThrough,
+    updatedAt,
+  };
+}
+
+/**
+ * Binds the session port to an injected storage backend.
+ *
+ * Storage selection belongs to the host: the same port works over the memory
+ * store and the Azure Tables adapter.
+ */
+export function createSessionStore(
+  store: Store,
+  options: SessionStoreOptions = {},
+): SessionStore {
+  const clock = options.clock ?? systemClock;
+  const logger = options.logger ?? noopLogger;
+  const absoluteLifetimeMs = positiveFinite(
+    options.absoluteLifetimeMs ?? DEFAULT_ABSOLUTE_LIFETIME_MS,
+    "absoluteLifetimeMs",
+  );
+  const idleTimeoutMs = positiveFinite(
+    options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
+    "idleTimeoutMs",
+  );
+  const sessions = store.collection(sessionCollection);
+
+  return {
+    async create(sessionId, session) {
+      const idHash = await hashSessionId(sessionId);
+      const record = createdRecord(session, clock.now(), absoluteLifetimeMs);
+      const principalHash = await hashPrincipalId(session.principalId);
+      const stateKey = principalRevocationKey(principalHash);
+
+      for (;;) {
+        const state = checkedRevocationState(
+          await sessions.getVersioned(stateKey),
+        );
+        const revocation = state === null ? undefined : state.value;
+        if (
+          revocation !== undefined &&
+          (revocation.revoking ||
+            timestamp(record.createdAt) <= timestamp(revocation.revokedThrough))
+        ) {
+          throw new Error("Session issuance overlapped principal revocation.");
+        }
+
+        const outcome = await sessions.transact(SESSION_PARTITION, [
+          state === null
+            ? {
+                action: "insert",
+                value: newRevocationRecord(
+                  session.principalId,
+                  principalHash,
+                  record.createdAt,
+                  false,
+                ),
+              }
+            : {
+                action: "putIfUnchanged",
+                value: state.value,
+                version: state.version,
+              },
+          {
+            action: "insert",
+            value: { kind: "session", ...record, idHash },
+          },
+        ]);
+
+        if (outcome.committed) {
+          return record;
+        }
+        if (
+          outcome.reason === "exists" &&
+          (outcome.failedAction === 1 ||
+            (await sessions.get(sessionKey(idHash))) !== null)
+        ) {
+          throw new Error("Session id collision.");
+        }
+        if (outcome.failedAction === 0) {
+          continue;
+        }
+        if (outcome.reason === "exists") {
+          continue;
+        }
+      }
+    },
+
+    async get(sessionId, now = clock.now()) {
+      const key = sessionKey(await hashSessionId(sessionId));
+      const versioned = await sessions.getVersioned(key);
+      if (versioned === null || !isSessionRecord(versioned.value)) {
+        return null;
+      }
+
+      const initiallyRead = versioned.value;
+      if (!isLive(initiallyRead, now, idleTimeoutMs)) {
+        await sessions
+          .deleteIfUnchanged(key, versioned.version)
+          .catch(() => undefined);
+        return null;
+      }
+
+      await sessions
+        .update(key, (current) => {
+          if (
+            current === null ||
+            !isSessionRecord(current) ||
+            !isLive(current, now, idleTimeoutMs)
+          ) {
+            return { action: "keep" };
+          }
+          const currentLastSeen = timestamp(current.lastSeenAt);
+          const at = timestamp(now);
+          if (at <= currentLastSeen) {
+            return { action: "keep" };
+          }
+          return {
+            action: "write",
+            value: {
+              ...current,
+              lastSeenAt: new Date(at).toISOString(),
+            },
+          };
+        })
+        .catch(() => undefined);
+
+      return publicRecord(initiallyRead);
+    },
+
+    async destroy(sessionId) {
+      await sessions.delete(sessionKey(await hashSessionId(sessionId)));
+    },
+
+    async destroyAllForPrincipal(principalId) {
+      const principalHash = await hashPrincipalId(principalId);
+      const stateKey = principalRevocationKey(principalHash);
+      const startedAt = isoTimestamp(
+        clock.now(),
+        "Clock returned an invalid timestamp.",
+      );
+
+      for (;;) {
+        const state = checkedRevocationState(
+          await sessions.getVersioned(stateKey),
+        );
+        const revocation = state === null ? undefined : state.value;
+        const outcome = await sessions.transact(SESSION_PARTITION, [
+          state === null
+            ? {
+                action: "insert",
+                value: newRevocationRecord(
+                  principalId,
+                  principalHash,
+                  startedAt,
+                  true,
+                ),
+              }
+            : {
+                action: "putIfUnchanged",
+                value: newRevocationRecord(
+                  principalId,
+                  principalHash,
+                  startedAt,
+                  true,
+                  revocation,
+                ),
+                version: state.version,
+              },
+        ]);
+        if (outcome.committed) {
+          break;
+        }
+      }
+
+      let destroyed = 0;
+      for (const record of await sessions.list(SESSION_PARTITION)) {
+        if (!isSessionRecord(record)) {
+          continue;
+        }
+        if (record.principalId !== principalId) {
+          continue;
+        }
+        if (await sessions.delete(sessionKey(record.idHash))) {
+          destroyed += 1;
+        }
+      }
+
+      for (;;) {
+        const state = checkedRevocationState(
+          await sessions.getVersioned(stateKey),
+        );
+        if (state === null) {
+          throw new Error("Stored session revocation state is invalid.");
+        }
+        const revocation = state.value;
+        const outcome = await sessions.transact(SESSION_PARTITION, [
+          {
+            action: "putIfUnchanged",
+            value: newRevocationRecord(
+              principalId,
+              principalHash,
+              laterTimestamp(startedAt, clock.now()),
+              false,
+              revocation,
+            ),
+            version: state.version,
+          },
+        ]);
+        if (outcome.committed) {
+          break;
+        }
+      }
+
+      logger.log("info", "Sessions revoked", { destroyed });
+      return destroyed;
+    },
+
+    async purgeExpired(now = clock.now()) {
+      let purged = 0;
+      for (const versioned of await sessions.listVersioned(SESSION_PARTITION)) {
+        if (!isSessionRecord(versioned.value)) {
+          continue;
+        }
+        if (isLive(versioned.value, now, idleTimeoutMs)) {
+          continue;
+        }
+        if (
+          await sessions.deleteIfUnchanged(
+            sessionKey(versioned.value.idHash),
+            versioned.version,
+          )
+        ) {
+          purged += 1;
+        }
+      }
+      logger.log("info", "Expired sessions purged", { purged });
+      return purged;
+    },
+  };
+}

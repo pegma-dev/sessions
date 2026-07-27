@@ -1,0 +1,60 @@
+# Publishes every public workspace package to npm.
+# Authentication is trusted-publisher OIDC only; no token fallback exists.
+
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Check types
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          for manifest in packages/*/package.json; do
+            name=$(node -p "require('./$manifest').name")
+            version=$(node -p "require('./$manifest').version")
+            if [ "$(node -p "require('./$manifest').private === true")" = "true" ]; then
+              continue
+            fi
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "skipping $name@$version (already on the registry)"
+              continue
+            fi
+            npm publish -w "$name" --provenance
+          done
