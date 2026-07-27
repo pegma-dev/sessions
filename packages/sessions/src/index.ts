@@ -356,7 +356,6 @@ export function createSessionStore(
       const principalHash = await hashPrincipalId(session.principalId);
       const stateKey = principalRevocationKey(principalHash);
 
-      let markedRevoking = false;
       for (
         let attempt = 1;
         attempt <= MAX_REVOCATION_TRANSACTION_ATTEMPTS;
