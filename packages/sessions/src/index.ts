@@ -590,13 +590,6 @@ export function createSessionStore(
           await sessions.getVersioned(stateKey),
         );
         const revocation = state === null ? undefined : state.value;
-        if (
-          revocation?.revoking === true &&
-          timestamp(startedAt) < timestamp(revocation.leaseExpiresAt)
-        ) {
-          await retryRevocationTransaction(attempt);
-          continue;
-        }
         const outcome = await sessions.transact(SESSION_PARTITION, [
           state === null
             ? {
@@ -630,6 +623,19 @@ export function createSessionStore(
         throwRevocationTransactionLimit();
       }
 
+      async function requireOwnedRevocation(): Promise<void> {
+        const state = checkedRevocationState(
+          await sessions.getVersioned(stateKey),
+        );
+        if (
+          state === null ||
+          state.value.revocationToken !== revocationToken ||
+          !state.value.revoking
+        ) {
+          throwRevocationTransactionLimit();
+        }
+      }
+
       let destroyed = 0;
       for (const record of await sessions.list(SESSION_PARTITION)) {
         if (!isSessionRecord(record)) {
@@ -638,6 +644,7 @@ export function createSessionStore(
         if (record.principalId !== principalId) {
           continue;
         }
+        await requireOwnedRevocation();
         if (await sessions.delete(sessionKey(record.idHash))) {
           destroyed += 1;
         }

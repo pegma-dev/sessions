@@ -786,20 +786,19 @@ for (const backend of backends) {
       const wrapped = wrapSessionCollection(base, (collection) => ({
         ...collection,
         async list(partition) {
-          const listed = await collection.list(partition);
           if (pauseFirstList) {
             pauseFirstList = false;
             firstListEntered();
             await firstListRelease;
           }
-          return listed;
+          return collection.list(partition);
         },
       }));
       const firstRevoker = createSessionStore(wrapped, {
         clock: fixedClock(NOW),
       });
       const replacementRevoker = createSessionStore(wrapped, {
-        clock: fixedClock("2026-07-27T13:00:00.001Z"),
+        clock: fixedClock("2026-07-27T12:00:00.001Z"),
       });
       const issuerAfterReplacement = createSessionStore(wrapped, {
         clock: fixedClock("2026-07-27T13:00:00.002Z"),
@@ -828,7 +827,42 @@ for (const backend of backends) {
       ).not.toBeNull();
     });
 
-    it("rejects overlapping principal revocation while a guard lease is active", async () => {
+    it("allows a failed revocation to be retried before its lease expires", async () => {
+      const base = backend.freshStore();
+      let failFirstList = true;
+      const wrapped = wrapSessionCollection(base, (collection) => ({
+        ...collection,
+        async list(partition) {
+          if (failFirstList) {
+            failFirstList = false;
+            throw new Error("list unavailable");
+          }
+          return collection.list(partition);
+        },
+      }));
+      const failingRevoker = createSessionStore(wrapped, {
+        clock: fixedClock(NOW),
+      });
+      const retryingRevoker = createSessionStore(wrapped, {
+        clock: fixedClock("2026-07-27T12:00:00.001Z"),
+      });
+      await failingRevoker.create("retry-revocation-old", NEW_SESSION);
+
+      await expect(
+        failingRevoker.destroyAllForPrincipal(PRINCIPAL),
+      ).rejects.toThrow("list unavailable");
+      await expect(
+        retryingRevoker.destroyAllForPrincipal(PRINCIPAL),
+      ).resolves.toBe(1);
+      expect(
+        await retryingRevoker.get(
+          "retry-revocation-old",
+          "2026-07-27T12:00:00.001Z",
+        ),
+      ).toBeNull();
+    });
+
+    it("lets a newer revocation safely replace an active guard", async () => {
       const base = backend.freshStore();
       let firstListEntered!: () => void;
       let releaseFirstList!: () => void;
@@ -838,12 +872,16 @@ for (const backend of backends) {
       const firstListRelease = new Promise<void>((resolve) => {
         releaseFirstList = resolve;
       });
+      let pauseFirstList = true;
       const wrapped = wrapSessionCollection(base, (collection) => ({
         ...collection,
         async list(partition) {
           const listed = await collection.list(partition);
-          firstListEntered();
-          await firstListRelease;
+          if (pauseFirstList) {
+            pauseFirstList = false;
+            firstListEntered();
+            await firstListRelease;
+          }
           return listed;
         },
       }));
@@ -862,16 +900,18 @@ for (const backend of backends) {
       await firstListStarted;
       await expect(
         replacementRevoker.destroyAllForPrincipal(PRINCIPAL),
-      ).rejects.toThrow("Session revocation state changed too many times.");
+      ).resolves.toBe(1);
       await expect(
         issuerDuringReplacement.create(
           "overlapping-revocation-new",
           NEW_SESSION,
         ),
-      ).rejects.toThrow("Session issuance overlapped principal revocation.");
+      ).resolves.toMatchObject(NEW_SESSION);
 
       releaseFirstList();
-      await expect(firstRevocation).resolves.toBe(1);
+      await expect(firstRevocation).rejects.toThrow(
+        "Session revocation state changed too many times.",
+      );
 
       const issuerAfterOverlap = createSessionStore(wrapped, {
         clock: fixedClock("2026-07-27T12:00:00.004Z"),
