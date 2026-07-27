@@ -84,6 +84,7 @@ interface PrincipalRevocationRecord {
   readonly activeRevocations: number;
   readonly revocationToken: string;
   readonly leaseExpiresAt: IsoTimestamp;
+  readonly revocationGeneration: number;
   readonly revokedThrough: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
 }
@@ -126,6 +127,7 @@ const sessionCollection = defineCollection<StoredSessionEntry>({
             activeRevocations: String(value.activeRevocations),
             revocationToken: value.revocationToken,
             leaseExpiresAt: value.leaseExpiresAt,
+            revocationGeneration: String(value.revocationGeneration),
             revokedThrough: value.revokedThrough,
             updatedAt: value.updatedAt,
           }),
@@ -142,6 +144,7 @@ const sessionCollection = defineCollection<StoredSessionEntry>({
           leaseExpiresAt: String(
             record["leaseExpiresAt"] ?? NO_PRINCIPAL_REVOCATION,
           ),
+          revocationGeneration: Number(record["revocationGeneration"] ?? 0),
           revokedThrough: String(record["revokedThrough"] ?? ""),
           updatedAt: String(record["updatedAt"] ?? ""),
         };
@@ -190,6 +193,8 @@ function checkedRevocationState(
   if (
     !Number.isInteger(state.value.activeRevocations) ||
     state.value.activeRevocations < 0 ||
+    !Number.isInteger(state.value.revocationGeneration) ||
+    state.value.revocationGeneration < 0 ||
     state.value.revoking !== state.value.activeRevocations > 0
   ) {
     throw new Error("Stored session revocation state is invalid.");
@@ -366,6 +371,7 @@ function initialRevocationRecord(
     activeRevocations: 0,
     revocationToken: "",
     leaseExpiresAt: NO_PRINCIPAL_REVOCATION,
+    revocationGeneration: 0,
     revokedThrough: NO_PRINCIPAL_REVOCATION,
     updatedAt,
   };
@@ -387,6 +393,7 @@ function beginRevocationRecord(
     activeRevocations: 1,
     revocationToken,
     leaseExpiresAt: timestampPlus(updatedAt, REVOCATION_GUARD_LEASE_MS),
+    revocationGeneration: (previous?.revocationGeneration ?? 0) + 1,
     revokedThrough:
       previous === undefined
         ? updatedAt
@@ -410,6 +417,7 @@ function finishRevocationRecord(
     activeRevocations: 0,
     revocationToken: "",
     leaseExpiresAt: NO_PRINCIPAL_REVOCATION,
+    revocationGeneration: previous.revocationGeneration,
     revokedThrough: laterTimestamp(previous.revokedThrough, updatedAt),
     updatedAt,
   };
@@ -443,6 +451,7 @@ export function createSessionStore(
       const record = createdRecord(session, clock.now(), absoluteLifetimeMs);
       const principalHash = await hashPrincipalId(session.principalId);
       const stateKey = principalRevocationKey(principalHash);
+      let observedRevocationGeneration: number | undefined;
 
       for (
         let attempt = 1;
@@ -453,11 +462,15 @@ export function createSessionStore(
           await sessions.getVersioned(stateKey),
         );
         const revocation = state === null ? undefined : state.value;
+        const revocationGeneration = revocation?.revocationGeneration ?? 0;
         if (
-          revocation !== undefined &&
-          (revocation.revoking ||
-            timestamp(record.createdAt) <= timestamp(revocation.revokedThrough))
+          observedRevocationGeneration !== undefined &&
+          observedRevocationGeneration !== revocationGeneration
         ) {
+          throw new Error("Session issuance overlapped principal revocation.");
+        }
+        observedRevocationGeneration ??= revocationGeneration;
+        if (revocation?.revoking === true) {
           throw new Error("Session issuance overlapped principal revocation.");
         }
 
@@ -493,6 +506,10 @@ export function createSessionStore(
           throw new Error("Session id collision.");
         }
         if (outcome.failedAction === 0) {
+          await retryRevocationTransaction(attempt);
+          continue;
+        }
+        if (outcome.reason === "changed") {
           await retryRevocationTransaction(attempt);
           continue;
         }

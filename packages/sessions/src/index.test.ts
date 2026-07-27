@@ -55,6 +55,7 @@ interface StoredRevocationFixture {
   readonly activeRevocations: number;
   readonly revocationToken: string;
   readonly leaseExpiresAt: string;
+  readonly revocationGeneration: number;
   readonly revokedThrough: string;
   readonly updatedAt: string;
 }
@@ -717,6 +718,50 @@ for (const backend of backends) {
       });
       await expect(
         afterRevocation.create("revocation-create-after", NEW_SESSION),
+      ).resolves.toMatchObject(NEW_SESSION);
+    });
+
+    it("rejects overlapping creation even when the issuer clock is ahead", async () => {
+      const base = backend.freshStore();
+      let newSessionHash = "";
+      let revoker: ReturnType<typeof createSessionStore>;
+      let revokeDuringCreate = false;
+      const wrapped = wrapSessionCollection(base, (collection) => ({
+        ...collection,
+        async transact(partition, actions) {
+          if (
+            revokeDuringCreate &&
+            actions.length === 2 &&
+            actions[1]?.action === "insert" &&
+            (actions[1].value as StoredFixture).kind === "session" &&
+            (actions[1].value as StoredSessionFixture).idHash === newSessionHash
+          ) {
+            revokeDuringCreate = false;
+            await revoker.destroyAllForPrincipal(PRINCIPAL);
+          }
+          return collection.transact(partition, actions);
+        },
+      }));
+      revoker = createSessionStore(wrapped, {
+        clock: fixedClock(NOW),
+      });
+      const issuerWithAheadClock = createSessionStore(wrapped, {
+        clock: fixedClock("2026-07-27T13:00:00.000Z"),
+      });
+      await revoker.create("skewed-revocation-old", NEW_SESSION);
+      newSessionHash = await sha256("skewed-revocation-new");
+      revokeDuringCreate = true;
+
+      await expect(
+        issuerWithAheadClock.create("skewed-revocation-new", NEW_SESSION),
+      ).rejects.toThrow("Session issuance overlapped principal revocation.");
+      expect(await revoker.get("skewed-revocation-old", NOW)).toBeNull();
+      expect(
+        await revoker.get("skewed-revocation-new", "2026-07-27T13:00:00.000Z"),
+      ).toBeNull();
+
+      await expect(
+        issuerWithAheadClock.create("skewed-revocation-after", NEW_SESSION),
       ).resolves.toMatchObject(NEW_SESSION);
     });
 
