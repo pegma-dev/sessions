@@ -17,6 +17,10 @@ surface; this store remembers the result.
 > Sessions is in early `0.x` development. Its public API is not stable, its
 > package is not published, and it is not ready for production use.
 
+Current status: the record-store package is implemented on `main`, and the
+first consumer migration is in review in
+[RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54).
+
 What it does own, it owns opinionatedly:
 
 - **Hashed identifiers, non-optionally** — the raw session id is hashed

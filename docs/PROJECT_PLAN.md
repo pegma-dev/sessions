@@ -6,6 +6,8 @@
 ([PR #1](https://github.com/pegma-dev/sessions/pull/1),
 `f5ea435`, 2026-07-27). The record store, package scaffolding, and
 memory/Azurite race suite described below are the repository baseline.
+Phase 2 is in review in the first consumer
+([RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54)).
 `@pegma/sessions` remains `0.x`, public API unstable, and unpublished.
 
 **Initial reference application:** RetireGolden, whose account API carries the
@@ -240,13 +242,13 @@ the README leads with what the component is not (an auth solution).
 ### Phase 2 — first consumer
 
 RetireGolden swaps `session.js`'s store internals for `@pegma/sessions`,
-keeping its cookie, CSRF, and OIDC layers untouched. **Timing gate: after
-the storage migration's stage-soak week closes and the production deploy
-lands (~2026-08-03)** — same rule as every consumer swap: don't change the
-code under soak. The swap signs stage out once, which is routine. Exit: the
-application's session and BFF test suites pass with the store injected, and
-`destroyAllForPrincipal` is exercised by the account-deletion path end to
-end.
+keeping its cookie, CSRF, and OIDC layers untouched. The first-consumer PR is
+now in review in
+[RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54).
+The swap signs existing server-side sessions out once, which is routine for
+ephemeral BFF sessions. Exit: the application's session and BFF test suites
+pass with the store injected, and `destroyAllForPrincipal` is exercised by
+the account-deletion path end to end.
 
 ### Phase 3 — second consumer, shape's verdict
 
@@ -295,8 +297,7 @@ a consumer measures it.
 
 1. Phase 1 is merged on `main`; do not keep dispatching record-store
    extraction work from this plan.
-2. Keep Phase 2 gated until RetireGolden's storage migration finishes its
-   stage-soak week and reaches production (currently targeted for
-   approximately 2026-08-03). Do not change the code under soak.
-3. After that gate closes, replace only RetireGolden's session-store internals;
-   its cookies, CSRF, OIDC, and HTTP behavior remain host code.
+2. Finish the RetireGolden Phase 2 consumer PR and production deploy; keep
+   cookies, CSRF, OIDC, and HTTP behavior as host code.
+3. After Phase 2 ships, update this plan to mark the first consumer complete
+   and dispatch only the next unblocked step.
