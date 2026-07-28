@@ -6,7 +6,7 @@
 ([PR #1](https://github.com/pegma-dev/sessions/pull/1),
 `f5ea435`, 2026-07-27). The record store, package scaffolding, and
 memory/Azurite race suite described below are the repository baseline.
-Phase 2 is in review in the first consumer
+Phase 2 is merged in the first consumer
 ([RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54)).
 `@pegma/sessions` remains `0.x`, public API unstable, and unpublished.
 
@@ -239,16 +239,16 @@ memory and real Azurite. The cookie/OIDC halves of the reference file
 explicitly stayed behind. Exit was met: the suite was green both ways, and
 the README leads with what the component is not (an auth solution).
 
-### Phase 2 — first consumer
+### Phase 2 — first consumer, merged
 
 RetireGolden swaps `session.js`'s store internals for `@pegma/sessions`,
-keeping its cookie, CSRF, and OIDC layers untouched. The first-consumer PR is
-now in review in
+keeping its cookie, CSRF, and OIDC layers untouched. The first-consumer PR
+merged in
 [RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54).
 The swap signs existing server-side sessions out once, which is routine for
-ephemeral BFF sessions. Exit: the application's session and BFF test suites
-pass with the store injected, and `destroyAllForPrincipal` is exercised by
-the account-deletion path end to end.
+ephemeral BFF sessions. Exit was met: the application's session and BFF test
+suites passed with the store injected, and `destroyAllForPrincipal` is
+exercised by the account-deletion path end to end.
 
 ### Phase 3 — second consumer, shape's verdict
 
@@ -297,7 +297,8 @@ a consumer measures it.
 
 1. Phase 1 is merged on `main`; do not keep dispatching record-store
    extraction work from this plan.
-2. Finish the RetireGolden Phase 2 consumer PR and production deploy; keep
-   cookies, CSRF, OIDC, and HTTP behavior as host code.
-3. After Phase 2 ships, update this plan to mark the first consumer complete
-   and dispatch only the next unblocked step.
+2. Observe the RetireGolden production deploy path for the merged consumer
+   swap; keep cookies, CSRF, OIDC, and HTTP behavior as host code.
+3. Dispatch Phase 3 only when the support desk or another real BFF-shaped
+   consumer is ready to test the host-data-field shape and any
+   `listForPrincipal` demand.
