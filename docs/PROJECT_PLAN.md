@@ -10,8 +10,14 @@ Phase 1 is merged on `main`
 suite described below are the repository baseline. Phase 2 is merged in the
 first consumer
 ([RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54)).
-`@pegma/sessions` is published as `0.1.0`; it remains `0.x`, with a public
-API that is explicitly unstable.
+`@pegma/sessions@0.1.0` is published on npm, with its public API still
+unstable. Its GitHub release was created from a lightweight tag on 2026-07-27
+and the release workflow initially failed because the package name did not
+exist. A maintainer subsequently published the exact expected tarball
+manually. The registry version has the release commit as `gitHead`, but no npm
+provenance. Both the npm version and lightweight tag are immutable audit
+history; releases from `v0.1.1` onward use protected signed annotated tags and
+the OIDC-only prepared-artifact workflow.
 
 **Initial reference application:** RetireGolden, whose account API carries the
 production-tested implementation this component is extracted from
@@ -262,12 +268,17 @@ cache bound). This phase judges the host-data-field ergonomics (is one
 encoded field pleasant enough, or does it push hosts toward abuse?) and
 whether a `listForPrincipal` read belongs in the port (see Open questions).
 
-### Phase 4 — publish, complete
+### Phase 4 — first package published; future path hardened
 
-First public `0.x` is published as `@pegma/sessions` version `0.1.0`, pinned to the
-spine and storage-core versions it was verified against. The initial package
-exists on npm; future releases go through the repository's `npm-publish`
-GitHub environment and trusted-publisher workflow. Breaking changes remain
+First public `0.x` is published as `@pegma/sessions` version `0.1.0`, pinned
+to the spine and storage-core versions it was verified against. It was
+published manually from the exact expected bytes after the original workflow
+failed, and consequently has no npm provenance.
+
+The next release is at least `v0.1.1` and uses the hardened path: a protected
+signed annotated tag on `origin/main`, an unprivileged preparation job that
+records and uploads the exact tarball, and a minimal `npm-publish`
+environment job using trusted-publisher OIDC. Breaking changes remain
 permitted until real consumers say otherwise.
 
 ## Open questions
@@ -307,3 +318,7 @@ a consumer measures it.
 3. Dispatch Phase 3 only when the support desk or another real BFF-shaped
    consumer is ready to test the host-data-field shape and any
    `listForPrincipal` demand.
+4. Configure and verify npm trusted publishing, then release the next version
+   (at least `v0.1.1`) from a protected signed annotated tag. Never move or
+   recreate the legacy lightweight `v0.1.0` tag or attempt to replace its
+   immutable npm version.

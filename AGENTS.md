@@ -60,3 +60,15 @@ The design is extracted from the store half of `api/src/lib/session.js` in
 the RetireGolden account API (its cookie/OIDC/CSRF halves deliberately stay
 there). When behaviour here is ambiguous, that implementation and its tests
 are the precedent.
+
+## Release safety
+
+The published package is prepared once from a protected, signed annotated
+release tag and then published from that exact tarball through npm trusted
+publishing. Never add a token fallback, publish from a branch or lightweight
+tag, or rebuild in the OIDC-enabled job. See `docs/RELEASING.md`.
+
+The legacy `v0.1.0` source tag is lightweight and the package was published
+manually after its release workflow failed. Preserve both as immutable audit
+history; that release has no npm provenance. Every release from `v0.1.1`
+onward must use the signed-tag prepared-artifact workflow.
