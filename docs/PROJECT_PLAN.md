@@ -8,7 +8,8 @@
 memory/Azurite race suite described below are the repository baseline.
 Phase 2 is merged in the first consumer
 ([RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54)).
-`@pegma/sessions` remains `0.x`, public API unstable, and unpublished.
+`@pegma/sessions` is published as `0.1.0`; it remains `0.x`, with a public
+API that is explicitly unstable.
 
 **Initial reference application:** RetireGolden, whose account API carries the
 production-tested implementation this component is extracted from
@@ -259,10 +260,12 @@ cache bound). This phase judges the host-data-field ergonomics (is one
 encoded field pleasant enough, or does it push hosts toward abuse?) and
 whether a `listForPrincipal` read belongs in the port (see Open questions).
 
-### Phase 4 — publish
+### Phase 4 — publish, complete
 
-First public `0.x` alongside the ecosystem's publishing wave, pinned to the
-spine and storage-core versions it was verified against. Breaking changes
+First public `0.x` is published as `@pegma/sessions@0.1.0`, pinned to the
+spine and storage-core versions it was verified against. The initial package
+exists on npm; future releases go through the repository's `npm-publish`
+GitHub environment and trusted-publisher workflow. Breaking changes remain
 permitted until real consumers say otherwise.
 
 ## Open questions

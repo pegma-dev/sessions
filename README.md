@@ -14,11 +14,11 @@ handling, no CSRF defense. Your host owns its login flow and its HTTP
 surface; this store remembers the result.
 
 > [!IMPORTANT]
-> Sessions is in early `0.x` development. Its public API is not stable, its
-> package is not published, and it is not ready for production use.
+> `@pegma/sessions` is published as `0.1.0`. It remains early `0.x`: the
+> public API is not stable, and it is not ready for production use.
 
-Current status: the record-store package is implemented on `main`, and the
-first consumer migration is merged in
+Current status: the record-store package is published on npm, and the first
+consumer migration is merged in
 [RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54).
 
 What it does own, it owns opinionatedly:
