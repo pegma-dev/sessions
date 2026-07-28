@@ -2,11 +2,12 @@
 
 ## Status
 
-**Stage:** Phase 1 is merged on `main`
-([PR #1](https://github.com/pegma-dev/sessions/pull/1),
-`f5ea435`, 2026-07-27). The record store, package scaffolding, and
-memory/Azurite race suite described below are the repository baseline.
-Phase 2 is merged in the first consumer
+**Stage:** First public `0.x` is published as `@pegma/sessions@0.1.0`.
+Phase 1 is merged on `main`
+([PR #1](https://github.com/pegma-dev/sessions/pull/1), `f5ea435`,
+2026-07-27): the record store, package scaffolding, and memory/Azurite race
+suite described below are the repository baseline. Phase 2 is merged in the
+first consumer
 ([RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54)).
 `@pegma/sessions` is published as `0.1.0`; it remains `0.x`, with a public
 API that is explicitly unstable.
