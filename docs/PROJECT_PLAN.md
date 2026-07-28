@@ -321,7 +321,7 @@ a consumer measures it.
    cookies, CSRF, Identity, and HTTP behavior as host code.
 2. Add `listForPrincipal` only when a real device-management or Support Desk
    flow demonstrates the need.
-3. Release the next version
-   (at least `v0.1.1`) from a protected signed annotated tag. Never move or
-   recreate the legacy lightweight `v0.1.0` tag or attempt to replace its
-   immutable npm version.
+3. Configure and verify npm trusted publishing, `RELEASE_ALLOWED_SIGNERS`, and
+   the protected signed-tag ruleset, then release the next version (at least
+   `v0.1.1`) through the hardened workflow. Never move or recreate the legacy
+   lightweight `v0.1.0` tag or attempt to replace its immutable npm version.
