@@ -17,9 +17,12 @@ surface; this store remembers the result.
 > `@pegma/sessions` is published as `0.1.0`. It remains early `0.x`: the
 > public API is not stable, and it is not ready for production use.
 
-Current status: the record-store package is published on npm, and the first
+Current status: the record-store package is published on npm, the first
 consumer migration is merged in
 [RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54).
+pegma.dev is the second consumer: its production Identity Worker resolves the
+opaque browser cookie through `@pegma/sessions` before revalidating Identity
+and Authorization claims at `/api/secure`.
 That first version was recovered through a manual maintainer publish after
 its GitHub release workflow failed, so it has no npm provenance. Releases
 from `0.1.1` onward use protected signed tags and the repository's OIDC-only

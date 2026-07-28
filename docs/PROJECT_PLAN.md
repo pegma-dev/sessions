@@ -2,8 +2,10 @@
 
 ## Status
 
-**Stage:** First public `0.x` is published as `@pegma/sessions` version
-`0.1.0`.
+**Stage:** Phases 1–4 are complete. `@pegma/sessions@0.1.0` is published;
+RetireGolden is the first integrated consumer and pegma.dev is the second,
+live consumer. The public API remains unstable.
+
 Phase 1 is merged on `main`
 ([PR #1](https://github.com/pegma-dev/sessions/pull/1), `f5ea435`,
 2026-07-27): the record store, package scaffolding, and memory/Azurite race
@@ -259,14 +261,18 @@ ephemeral BFF sessions. Exit was met: the application's session and BFF test
 suites passed with the store injected, and `destroyAllForPrincipal` is
 exercised by the account-deletion path end to end.
 
-### Phase 3 — second consumer, shape's verdict
+### Phase 3 — second consumer, shape's verdict ✓
 
-The support desk is the natural second consumer: agent sign-in is BFF-shaped,
-and agent sessions give `destroyAllForPrincipal` a sharper meaning (role
-revoked → sessions die, alongside authorization-core's 60-second permission
-cache bound). This phase judges the host-data-field ergonomics (is one
-encoded field pleasant enough, or does it push hosts toward abuse?) and
-whether a `listForPrincipal` read belongs in the port (see Open questions).
+pegma.dev is the second consumer. Its production Identity Worker stores
+browser sessions in D1 and its generic `/api/secure` proof resolves the opaque
+cookie through `@pegma/sessions` before revalidating Identity and Authorization
+claims. The existing host-data field was sufficient and no
+`listForPrincipal` expansion was needed.
+
+Support Desk remains a useful later consumer: agent sign-in is BFF-shaped, and
+agent sessions give `destroyAllForPrincipal` a sharper meaning (role revoked →
+sessions die, alongside authorization-core's 60-second permission cache
+bound).
 
 ### Phase 4 — first package published; future path hardened
 
@@ -311,14 +317,11 @@ a consumer measures it.
 
 ## Near-term backlog
 
-1. Phase 1 is merged on `main`; do not keep dispatching record-store
-   extraction work from this plan.
-2. Observe the RetireGolden production deploy path for the merged consumer
-   swap; keep cookies, CSRF, OIDC, and HTTP behavior as host code.
-3. Dispatch Phase 3 only when the support desk or another real BFF-shaped
-   consumer is ready to test the host-data-field shape and any
-   `listForPrincipal` demand.
-4. Configure and verify npm trusted publishing, then release the next version
+1. Observe RetireGolden and pegma.dev for contract friction while keeping
+   cookies, CSRF, Identity, and HTTP behavior as host code.
+2. Add `listForPrincipal` only when a real device-management or Support Desk
+   flow demonstrates the need.
+3. Release the next version
    (at least `v0.1.1`) from a protected signed annotated tag. Never move or
    recreate the legacy lightweight `v0.1.0` tag or attempt to replace its
    immutable npm version.
