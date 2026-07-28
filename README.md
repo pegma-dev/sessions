@@ -18,7 +18,7 @@ surface; this store remembers the result.
 > package is not published, and it is not ready for production use.
 
 Current status: the record-store package is implemented on `main`, and the
-first consumer migration is in review in
+first consumer migration is merged in
 [RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54).
 
 What it does own, it owns opinionatedly:
