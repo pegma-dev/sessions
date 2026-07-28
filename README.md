@@ -20,6 +20,10 @@ surface; this store remembers the result.
 Current status: the record-store package is published on npm, and the first
 consumer migration is merged in
 [RetireGolden/retiregolden.org#54](https://github.com/RetireGolden/retiregolden.org/pull/54).
+That first version was recovered through a manual maintainer publish after
+its GitHub release workflow failed, so it has no npm provenance. Releases
+from `0.1.1` onward use protected signed tags and the repository's OIDC-only
+prepared-artifact workflow.
 
 What it does own, it owns opinionatedly:
 
