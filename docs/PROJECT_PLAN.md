@@ -2,7 +2,8 @@
 
 ## Status
 
-**Stage:** First public `0.x` is published as `@pegma/sessions@0.1.0`.
+**Stage:** First public `0.x` is published as `@pegma/sessions` version
+`0.1.0`.
 Phase 1 is merged on `main`
 ([PR #1](https://github.com/pegma-dev/sessions/pull/1), `f5ea435`,
 2026-07-27): the record store, package scaffolding, and memory/Azurite race
@@ -263,7 +264,7 @@ whether a `listForPrincipal` read belongs in the port (see Open questions).
 
 ### Phase 4 — publish, complete
 
-First public `0.x` is published as `@pegma/sessions@0.1.0`, pinned to the
+First public `0.x` is published as `@pegma/sessions` version `0.1.0`, pinned to the
 spine and storage-core versions it was verified against. The initial package
 exists on npm; future releases go through the repository's `npm-publish`
 GitHub environment and trusted-publisher workflow. Breaking changes remain
