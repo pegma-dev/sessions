@@ -44,7 +44,7 @@ describe("release package metadata", () => {
 
   it("validates the root, package manifest, and lockfile together", async () => {
     await expect(validateRepository()).resolves.toMatchObject({
-      version: "0.1.0",
+      version: packageVersion,
     });
   });
 
