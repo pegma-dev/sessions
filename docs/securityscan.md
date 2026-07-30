@@ -109,9 +109,13 @@ Review criteria include the hard rules in `AGENTS.md`:
   timestamps") pins that behaviour deliberately. The row is only reachable by
   something with storage write access, and the correct remedy for corrupted
   storage is out-of-band repair or deletion of that one row, not a
-  fail-open branch in the port. Contrast with finding 1, which is a genuine
-  gap: there the state is _valid_ and merely stale, so the port can recover it
-  safely.
+  fail-open branch in the port. Finding 1 lands the same way for a different
+  reason: there the guard row is _valid_ and merely stale, and it is still left
+  fail-closed by design, because the port cannot judge staleness without
+  trusting an issuing host's clock. In both cases recovery is deliberately
+  outside the read path — a repeat `destroyAllForPrincipal` for a stale guard,
+  out-of-band repair for a corrupt one. Nothing in this component
+  auto-recovers a guard row that still reads `revoking: true`.
 
 ### 3. Release pipeline — verified sound, two informational observations (Informational)
 
