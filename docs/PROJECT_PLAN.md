@@ -2,9 +2,10 @@
 
 ## Status
 
-**Stage:** Phases 1–4 are complete. `@pegma/sessions@0.1.0` is published;
+**Stage:** Phases 1–4 are complete. `@pegma/sessions@0.1.1` is published;
 RetireGolden is the first integrated consumer and pegma.dev is the second,
-live consumer. The public API remains unstable.
+live consumer. `0.2.0` is prepared, aligning `@pegma/storage-core` at `0.4.0`
+across the stack. The public API remains unstable.
 
 Phase 1 is merged on `main`
 ([PR #1](https://github.com/pegma-dev/sessions/pull/1), `f5ea435`,
