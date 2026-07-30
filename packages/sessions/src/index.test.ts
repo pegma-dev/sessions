@@ -409,6 +409,56 @@ for (const backend of backends) {
       ).resolves.toMatchObject(NEW_SESSION);
     });
 
+    it("keeps an active guard closed against a clock past its lease", async () => {
+      const base = backend.freshStore();
+      let listEntered!: () => void;
+      let releaseList!: () => void;
+      const listStarted = new Promise<void>((resolve) => {
+        listEntered = resolve;
+      });
+      const listRelease = new Promise<void>((resolve) => {
+        releaseList = resolve;
+      });
+      let pauseList = true;
+      const wrapped = wrapSessionCollection(base, (collection) => ({
+        ...collection,
+        async list(partition) {
+          const listed = await collection.list(partition);
+          if (pauseList) {
+            pauseList = false;
+            listEntered();
+            await listRelease;
+          }
+          return listed;
+        },
+      }));
+      const revoker = createSessionStore(wrapped, {
+        clock: fixedClock(NOW),
+      });
+      // A full guard lease ahead of the revoker: expiry read from an issuer's
+      // own clock would call this freshly taken guard abandoned.
+      const issuerPastLease = createSessionStore(wrapped, {
+        clock: fixedClock("2026-07-27T13:00:00.000Z"),
+      });
+      await revoker.create("skewed-lease-old", NEW_SESSION);
+
+      const revocation = revoker.destroyAllForPrincipal(PRINCIPAL);
+      await listStarted;
+      await expect(
+        issuerPastLease.create("skewed-lease-new", NEW_SESSION),
+      ).rejects.toThrow("Session issuance overlapped principal revocation.");
+      releaseList();
+
+      await expect(revocation).resolves.toBe(1);
+      expect(await revoker.get("skewed-lease-old", NOW)).toBeNull();
+      expect(
+        await issuerPastLease.get(
+          "skewed-lease-new",
+          "2026-07-27T13:00:00.000Z",
+        ),
+      ).toBeNull();
+    });
+
     it("fails closed instead of moving the idle anchor backward", async () => {
       const inspected = inspectStorage(backend.freshStore());
       const sessions = createSessionStore(inspected.store, {

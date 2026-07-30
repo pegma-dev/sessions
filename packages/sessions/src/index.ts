@@ -19,6 +19,18 @@ const DEFAULT_ABSOLUTE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 const NO_PRINCIPAL_REVOCATION = "0000-01-01T00:00:00.000Z" as IsoTimestamp;
 const MAX_REVOCATION_TRANSACTION_ATTEMPTS = 8;
+/**
+ * How long a revocation records that it owns its guard row.
+ *
+ * Deliberately never consulted to decide that a guard is abandoned. Expiry can
+ * only be judged against some clock, and the clock available to `create` is the
+ * issuing host's: a host running an hour fast would read a guard taken seconds
+ * ago as expired, release it, and issue a session inside the revocation window.
+ * Recovery from a revocation that faulted mid-flight is a repeat
+ * `destroyAllForPrincipal`, which supersedes any guard without comparing clocks
+ * across hosts. A safe automatic takeover would need owner renewal observed
+ * over the taker's own elapsed time, not a stored deadline.
+ */
 const REVOCATION_GUARD_LEASE_MS = 60 * 60 * 1000;
 const CANONICAL_ISO_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
