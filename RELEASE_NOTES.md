@@ -1,21 +1,13 @@
-# @pegma/sessions v0.1.1
+# @pegma/sessions v0.2.0
 
-The first release through the hardened path: a protected signed annotated tag,
-a prepared artifact, and npm trusted publishing. `0.1.0` was published manually
-after its release workflow failed and has no provenance; see
-`docs/RELEASING.md`.
+A dependency-alignment release: `@pegma/storage-core` advances from `0.3.0` to
+`0.4.0`, matching the pin already used by webhooks, mail, and identity so host
+dependency trees resolve a single storage-core and no longer need an npm
+override to avoid two incompatible `Store` types. The
+`@pegma/storage-azure-tables` test backend advances to `0.4.0` alongside it.
 
-No behavioural change. The 2026-07-29 remediation pass over
-`docs/securityscan.md` disputed all seven findings with reasoning recorded
-inline — every suggested remediation would have traded a theoretical problem for
-a real one — so nothing in the session port changed.
-
-- Documents why the principal-revocation guard lease is deliberately never
-  consulted: expiry judged from an issuing host's clock lets a host running
-  fast release a guard taken seconds ago and issue a session inside the
-  revocation window. Recovery from a faulted revocation stays a repeat
-  `destroyAllForPrincipal`.
-- Adds a test pinning that an issuer whose clock is a full lease ahead of the
-  revoker is still refused while a revocation is in flight.
-- Records the 2026-07-29 dispositions in `docs/securityscan.md` and reformats
-  that file so `npm run format:check` passes.
+No behavioural or public API change in the session port itself. The version
+advances to `0.2.0` (rather than a patch) because hosts composing this package
+must now supply a storage-core `0.4.0` `Store`, which is a breaking composition
+change under `0.x` semver. The full memory and Azurite race suite passes
+against storage-core `0.4.0` unchanged.
