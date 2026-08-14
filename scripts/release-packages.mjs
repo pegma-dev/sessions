@@ -24,6 +24,7 @@ const DEPENDENCY_SECTIONS = [
   "dependencies",
   "devDependencies",
   "optionalDependencies",
+  "peerDependencies",
 ];
 
 export const RELEASE_PACKAGES = [PACKAGE];
@@ -72,12 +73,12 @@ function runNpm(arguments_, options = {}) {
   });
 }
 
-function parseQuotedYamlKey(raw) {
-  if (
-    (raw.startsWith("'") && raw.endsWith("'")) ||
-    (raw.startsWith('"') && raw.endsWith('"'))
-  ) {
-    return raw.slice(1, -1);
+function parseYamlScalar(raw) {
+  if (raw.startsWith("'") && raw.endsWith("'") && raw.length >= 2) {
+    return raw.slice(1, -1).replaceAll("''", "'");
+  }
+  if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
+    return raw.slice(1, -1).replaceAll('\\"', '"');
   }
   return raw;
 }
@@ -103,7 +104,7 @@ export function parsePnpmLockImporters(text) {
     }
     const importerMatch = /^  (\S[^:]*):\s*(?:\{\})?\s*$/u.exec(line);
     if (importerMatch !== null && !line.startsWith("    ")) {
-      currentImporter = parseQuotedYamlKey(importerMatch[1]);
+      currentImporter = parseYamlScalar(importerMatch[1]);
       importers[currentImporter] = {};
       currentSection = null;
       currentDependency = null;
@@ -127,7 +128,7 @@ export function parsePnpmLockImporters(text) {
       currentImporter !== null &&
       currentSection !== null
     ) {
-      currentDependency = parseQuotedYamlKey(depMatch[1]);
+      currentDependency = parseYamlScalar(depMatch[1]);
       importers[currentImporter][currentSection][currentDependency] = {
         specifier: undefined,
         version: undefined,
@@ -144,7 +145,7 @@ export function parsePnpmLockImporters(text) {
     ) {
       importers[currentImporter][currentSection][currentDependency][
         fieldMatch[1]
-      ] = fieldMatch[2];
+      ] = parseYamlScalar(fieldMatch[2]);
     }
     index += 1;
   }
@@ -153,6 +154,66 @@ export function parsePnpmLockImporters(text) {
 
 function lockResolvedVersion(version) {
   return /^(\S+?)(?:\(|$)/u.exec(version)?.[1];
+}
+
+function parseSemver(version) {
+  const match = STABLE_SEMVER.exec(lockResolvedVersion(version) ?? "");
+  if (match === null) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+function compareSemver(left, right) {
+  return (
+    left.major - right.major ||
+    left.minor - right.minor ||
+    left.patch - right.patch
+  );
+}
+
+function caretUpperBound(base) {
+  if (base.major > 0) return { major: base.major + 1, minor: 0, patch: 0 };
+  if (base.minor > 0) return { major: 0, minor: base.minor + 1, patch: 0 };
+  return { major: 0, minor: 0, patch: base.patch + 1 };
+}
+
+function tildeUpperBound(base) {
+  return { major: base.major, minor: base.minor + 1, patch: 0 };
+}
+
+export function resolvedVersionSatisfies(version, specifier) {
+  const resolved = parseSemver(version);
+  if (resolved === null || typeof specifier !== "string") return false;
+  if (specifier === "*" || specifier === "x" || specifier === "X") return true;
+  if (STABLE_SEMVER.test(specifier)) {
+    return lockResolvedVersion(version) === specifier;
+  }
+  const caret = /^\^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/u.exec(
+    specifier,
+  );
+  if (caret !== null) {
+    const base = parseSemver(caret[1]);
+    return (
+      base !== null &&
+      compareSemver(resolved, base) >= 0 &&
+      compareSemver(resolved, caretUpperBound(base)) < 0
+    );
+  }
+  const tilde = /^~((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/u.exec(
+    specifier,
+  );
+  if (tilde !== null) {
+    const base = parseSemver(tilde[1]);
+    return (
+      base !== null &&
+      compareSemver(resolved, base) >= 0 &&
+      compareSemver(resolved, tildeUpperBound(base)) < 0
+    );
+  }
+  return false;
 }
 
 export function validateLockImporter(importer, manifest, location) {
@@ -171,18 +232,10 @@ export function validateLockImporter(importer, manifest, location) {
       if (
         entry?.specifier !== specifier ||
         typeof entry.version !== "string" ||
-        entry.version.length === 0
+        !resolvedVersionSatisfies(entry.version, specifier)
       ) {
         fail(
           `${location} ${section}.${name} must match its own specifier and resolved version`,
-        );
-      }
-      if (
-        STABLE_SEMVER.test(specifier) &&
-        lockResolvedVersion(entry.version) !== specifier
-      ) {
-        fail(
-          `${location} ${section}.${name} resolved version must match its exact pin`,
         );
       }
     }

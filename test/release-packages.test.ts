@@ -8,6 +8,7 @@ import {
   decidePublication,
   parseArguments,
   parsePnpmLockImporters,
+  resolvedVersionSatisfies,
   validateLockImporter,
   validateReleaseTag,
   validateRepository,
@@ -115,6 +116,129 @@ describe("release package metadata", () => {
         },
         packageManifest,
         "swapped",
+      ),
+    ).toThrow("must match its own specifier and resolved version");
+  });
+
+  it("unquotes YAML scalars before comparing lockfile specifier and version", () => {
+    const lock = parsePnpmLockImporters(`lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      foo:
+        specifier: '1'
+        version: '1.0.0'
+      bar:
+        specifier: '*'
+        version: 2.0.0
+      baz:
+        specifier: '1.0.0'
+        version: '1.0.0'
+`);
+    expect(lock.importers["."]?.dependencies?.foo).toEqual({
+      specifier: "1",
+      version: "1.0.0",
+    });
+    expect(lock.importers["."]?.dependencies?.bar).toEqual({
+      specifier: "*",
+      version: "2.0.0",
+    });
+    expect(lock.importers["."]?.dependencies?.baz).toEqual({
+      specifier: "1.0.0",
+      version: "1.0.0",
+    });
+    expect(() =>
+      validateLockImporter(
+        {
+          dependencies: {
+            bar: { specifier: "*", version: "2.0.0" },
+            baz: { specifier: "1.0.0", version: "1.0.0" },
+          },
+        },
+        { dependencies: { bar: "*", baz: "1.0.0" } },
+        "quoted",
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts resolved versions that satisfy the declared specifier range", () => {
+    expect(resolvedVersionSatisfies("1.2.3", "^1.2.0")).toBe(true);
+    expect(
+      resolvedVersionSatisfies("1.2.3(@types/node@24.0.0)", "^1.2.0"),
+    ).toBe(true);
+    expect(resolvedVersionSatisfies("1.2.9", "~1.2.0")).toBe(true);
+    expect(resolvedVersionSatisfies("3.9.6", "^3.9.6")).toBe(true);
+    expect(resolvedVersionSatisfies("1.2.0", "1.2.0")).toBe(true);
+    expect(resolvedVersionSatisfies("1.2.3", "*")).toBe(true);
+    expect(resolvedVersionSatisfies("1.2.3", "1.2.0")).toBe(false);
+    expect(resolvedVersionSatisfies("2.0.0", "^1.2.0")).toBe(false);
+    expect(resolvedVersionSatisfies("1.3.0", "~1.2.0")).toBe(false);
+    expect(resolvedVersionSatisfies("1.2.3", ">=1.2.0")).toBe(false);
+    expect(() =>
+      validateLockImporter(
+        {
+          devDependencies: {
+            prettier: { specifier: "^3.9.6", version: "3.9.6" },
+          },
+        },
+        { devDependencies: { prettier: "^3.9.6" } },
+        "range",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateLockImporter(
+        {
+          dependencies: {
+            "@pegma/spine": { specifier: "0.1.1", version: "0.1.2" },
+          },
+        },
+        { dependencies: { "@pegma/spine": "0.1.1" } },
+        "exact-mismatch",
+      ),
+    ).toThrow("must match its own specifier and resolved version");
+  });
+
+  it("includes peerDependencies in lockfile validation", () => {
+    expect(() =>
+      validateLockImporter(
+        {
+          peerDependencies: {
+            typescript: { specifier: "^5.0.0", version: "5.9.3" },
+          },
+        },
+        { peerDependencies: { typescript: "^5.0.0" } },
+        "peers",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateLockImporter(
+        {},
+        { peerDependencies: { typescript: "^5.0.0" } },
+        "missing-peer",
+      ),
+    ).toThrow("must match its own specifier and resolved version");
+    expect(() =>
+      validateLockImporter(
+        {
+          peerDependencies: {
+            typescript: { specifier: "^4.0.0", version: "4.9.5" },
+          },
+        },
+        { peerDependencies: { typescript: "^5.0.0" } },
+        "stale-peer",
+      ),
+    ).toThrow("must match its own specifier and resolved version");
+    expect(() =>
+      validateLockImporter(
+        {
+          peerDependencies: {
+            a: { specifier: "^2.0.0", version: "2.0.0" },
+            b: { specifier: "^1.0.0", version: "1.0.0" },
+          },
+        },
+        { peerDependencies: { a: "^1.0.0", b: "^2.0.0" } },
+        "swapped-peer",
       ),
     ).toThrow("must match its own specifier and resolved version");
   });

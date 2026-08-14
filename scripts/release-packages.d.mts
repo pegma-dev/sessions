@@ -75,6 +75,11 @@ export function decidePublication(
 
 export function parsePnpmLockImporters(text: string): ParsedPnpmLock;
 
+export function resolvedVersionSatisfies(
+  version: string,
+  specifier: string,
+): boolean;
+
 export function validateLockImporter(
   importer: LockImporter | undefined,
   manifest: Record<string, unknown>,

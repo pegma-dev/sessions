@@ -35,10 +35,14 @@ credential re-presentable to another service.
 
 ## Development
 
-Node.js 22 or newer is required. The test suite starts a real Azurite Table
-service and runs the same behavioral cases over memory and Azure Tables.
+Node.js 22 or 24 is required for local development (the same versions CI
+runs). The published `engines` field remains `>=22`. Node 25 and later do
+not bundle Corepack, so install it first if `corepack` is missing. The test
+suite starts a real Azurite Table service and runs the same behavioral cases
+over memory and Azure Tables.
 
 ```sh
+npm install -g corepack
 corepack enable
 pnpm install
 pnpm run format:check
