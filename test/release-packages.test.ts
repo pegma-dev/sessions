@@ -67,13 +67,13 @@ describe("release package metadata", () => {
     );
     const rootManifest = JSON.parse(
       readFileSync(join(process.cwd(), "package.json"), "utf8"),
-    ) as Record<string, Record<string, string>>;
+    ) as { devDependencies: Record<string, string> };
     const packageManifest = JSON.parse(
       readFileSync(
         join(process.cwd(), "packages", "sessions", "package.json"),
         "utf8",
       ),
-    ) as Record<string, Record<string, string>>;
+    ) as { dependencies: Record<string, string> };
 
     expect(lock.lockfileVersion).toBe("9.0");
     expect(lock.importers["."]?.devDependencies?.prettier).toEqual({
