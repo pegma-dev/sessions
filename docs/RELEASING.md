@@ -47,7 +47,8 @@ move or recreate the tag, unpublish and reuse the version, or claim that
 The release tool verifies that:
 
 - the private root and sole public workspace use one stable version;
-- the root pins `pnpm@10.34.5` and `pnpm-lock.yaml` lists both manifests;
+- the root pins `pnpm@10.34.5` and `pnpm-lock.yaml` matches each
+  dependency to its own specifier and resolved version;
 - pack and trusted publish still use reviewed `npm@11.18.0`;
 - `@pegma/sessions` is public MIT-licensed ESM for Node 22 or newer;
 - runtime dependencies are pinned exactly;

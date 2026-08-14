@@ -7,6 +7,8 @@ import {
   RELEASE_PACKAGES,
   decidePublication,
   parseArguments,
+  parsePnpmLockImporters,
+  validateLockImporter,
   validateReleaseTag,
   validateRepository,
 } from "../scripts/release-packages.mjs";
@@ -46,6 +48,75 @@ describe("release package metadata", () => {
     await expect(validateRepository()).resolves.toMatchObject({
       version: packageVersion,
     });
+  });
+
+  it("never routes pack, view, or publish through npm_execpath", () => {
+    const source = readFileSync(
+      join(process.cwd(), "scripts", "release-packages.mjs"),
+      "utf8",
+    );
+    expect(source).not.toContain("process.env.npm_execpath");
+    expect(source).toContain(
+      'process.platform === "win32" ? "npm.cmd" : "npm"',
+    );
+  });
+
+  it("matches each lockfile dependency to its own specifier and resolved version", () => {
+    const lock = parsePnpmLockImporters(
+      readFileSync(join(process.cwd(), "pnpm-lock.yaml"), "utf8"),
+    );
+    const rootManifest = JSON.parse(
+      readFileSync(join(process.cwd(), "package.json"), "utf8"),
+    ) as Record<string, Record<string, string>>;
+    const packageManifest = JSON.parse(
+      readFileSync(
+        join(process.cwd(), "packages", "sessions", "package.json"),
+        "utf8",
+      ),
+    ) as Record<string, Record<string, string>>;
+
+    expect(lock.lockfileVersion).toBe("9.0");
+    expect(lock.importers["."]?.devDependencies?.prettier).toEqual({
+      specifier: rootManifest.devDependencies.prettier,
+      version: "3.9.6",
+    });
+    expect(
+      lock.importers["packages/sessions"]?.dependencies?.["@pegma/spine"],
+    ).toEqual({
+      specifier: packageManifest.dependencies["@pegma/spine"],
+      version: "0.1.1",
+    });
+    expect(
+      lock.importers["packages/sessions"]?.dependencies?.[
+        "@pegma/storage-core"
+      ],
+    ).toEqual({
+      specifier: packageManifest.dependencies["@pegma/storage-core"],
+      version: "0.4.0",
+    });
+
+    expect(() =>
+      validateLockImporter(lock.importers["."], rootManifest, "root"),
+    ).not.toThrow();
+    expect(() =>
+      validateLockImporter(
+        lock.importers["packages/sessions"],
+        packageManifest,
+        "package",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateLockImporter(
+        {
+          dependencies: {
+            "@pegma/spine": { specifier: "0.4.0", version: "0.1.1" },
+            "@pegma/storage-core": { specifier: "0.1.1", version: "0.4.0" },
+          },
+        },
+        packageManifest,
+        "swapped",
+      ),
+    ).toThrow("must match its own specifier and resolved version");
   });
 
   it("requires the release tag to match the package version", async () => {
@@ -163,10 +234,27 @@ describe("release source authentication", () => {
     expect(publish).not.toContain("npm install");
     expect(publish).not.toContain("pnpm install");
     expect(publish).not.toContain("release:pack");
-    expect(publish).toContain("npm run release:publish");
+    expect(publish).toContain("node scripts/release-packages.mjs publish");
+    expect(publish).not.toContain("corepack");
+    expect(publish).not.toContain("pnpm run");
+    expect(prepare).toContain("npm install --global npm@11.18.0");
     expect(workflow).not.toContain("workflow_dispatch");
     expect(workflow).not.toContain("NODE_AUTH_TOKEN");
     expect(workflow).toContain("retention-days: 30");
+  });
+
+  it("installs pnpm before setup-node caches the pnpm store", () => {
+    const workflow = readFileSync(
+      join(process.cwd(), ".github", "workflows", "ci.yml"),
+      "utf8",
+    );
+    const setupPnpm = workflow.indexOf("pnpm/action-setup@");
+    const cachePnpm = workflow.indexOf("cache: pnpm");
+    expect(setupPnpm).toBeGreaterThanOrEqual(0);
+    expect(cachePnpm).toBeGreaterThan(setupPnpm);
+    expect(workflow).toContain(
+      "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    );
   });
 });
 

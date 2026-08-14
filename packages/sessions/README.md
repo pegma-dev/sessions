@@ -39,6 +39,7 @@ Node.js 22 or newer is required. The test suite starts a real Azurite Table
 service and runs the same behavioral cases over memory and Azure Tables.
 
 ```sh
+corepack enable
 pnpm install
 pnpm run format:check
 pnpm run check

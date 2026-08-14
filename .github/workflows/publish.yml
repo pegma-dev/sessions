@@ -123,4 +123,4 @@ jobs:
           path: .release
 
       - name: Publish the verified prepared tarball
-        run: npm run release:publish -- -- --expected-release-commit "${RELEASE_COMMIT}" --manifest .release/package-manifest.json
+        run: node scripts/release-packages.mjs publish --expected-release-commit "${RELEASE_COMMIT}" --manifest .release/package-manifest.json

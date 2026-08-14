@@ -37,6 +37,21 @@ export interface RegistryState {
   readonly state: "absent" | "exact";
 }
 
+export interface LockDependencyEntry {
+  readonly specifier: string | undefined;
+  readonly version: string | undefined;
+}
+
+export interface LockImporter {
+  readonly [section: string]:
+    Readonly<Record<string, LockDependencyEntry>> | undefined;
+}
+
+export interface ParsedPnpmLock {
+  readonly lockfileVersion: string | undefined;
+  readonly importers: Readonly<Record<string, LockImporter>>;
+}
+
 export const RELEASE_PACKAGES: readonly ReleasePackageDefinition[];
 
 export function parseArguments(
@@ -57,6 +72,14 @@ export function decidePublication(
   localIntegrity: string,
   registryIntegrity: string | null,
 ): "publish" | "skip";
+
+export function parsePnpmLockImporters(text: string): ParsedPnpmLock;
+
+export function validateLockImporter(
+  importer: LockImporter | undefined,
+  manifest: Record<string, unknown>,
+  location: string,
+): void;
 
 export function prepareRelease(
   options?: ReleaseCommandOptions,
