@@ -47,7 +47,9 @@ move or recreate the tag, unpublish and reuse the version, or claim that
 The release tool verifies that:
 
 - the private root and sole public workspace use one stable version;
-- the root pins `pnpm@10.34.5` and `pnpm-lock.yaml` lists both manifests;
+- the root pins `pnpm@10.34.5` and `pnpm-lock.yaml` matches each
+  dependency, including `peerDependencies`, to its own specifier and a
+  resolved version that satisfies that specifier;
 - pack and trusted publish still use reviewed `npm@11.18.0`;
 - `@pegma/sessions` is public MIT-licensed ESM for Node 22 or newer;
 - runtime dependencies are pinned exactly;
@@ -108,9 +110,11 @@ After the first OIDC release succeeds, set npm Publishing access to
 Prepare every version from `0.1.1` onward through an ordinary pull request
 that updates the root, workspace, and lockfile versions together and adds
 reviewed release notes. Run the complete gate and a local release pack on
-Node 22 and 24:
+Node 22 and 24. Node 25 and later do not bundle Corepack, so install it
+first if `corepack` is missing:
 
 ```sh
+npm install -g corepack
 corepack enable
 npm install --global npm@11.18.0
 pnpm install
