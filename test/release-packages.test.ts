@@ -161,6 +161,7 @@ describe("release source authentication", () => {
     expect(publish).toContain("id-token: write");
     expect(publish).not.toContain("npm ci");
     expect(publish).not.toContain("npm install");
+    expect(publish).not.toContain("pnpm install");
     expect(publish).not.toContain("release:pack");
     expect(publish).toContain("npm run release:publish");
     expect(workflow).not.toContain("workflow_dispatch");

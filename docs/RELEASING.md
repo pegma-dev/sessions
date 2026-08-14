@@ -47,7 +47,8 @@ move or recreate the tag, unpublish and reuse the version, or claim that
 The release tool verifies that:
 
 - the private root and sole public workspace use one stable version;
-- the root pins `npm@11.18.0` and the lockfile matches both manifests;
+- the root pins `pnpm@10.34.5` and `pnpm-lock.yaml` lists both manifests;
+- pack and trusted publish still use reviewed `npm@11.18.0`;
 - `@pegma/sessions` is public MIT-licensed ESM for Node 22 or newer;
 - runtime dependencies are pinned exactly;
 - repository metadata points to `pegma-dev/sessions`;
@@ -110,13 +111,14 @@ reviewed release notes. Run the complete gate and a local release pack on
 Node 22 and 24:
 
 ```sh
+corepack enable
 npm install --global npm@11.18.0
-npm ci
-npm run format:check
-npm run check
-npm test
-npm run release:check
-npm run release:pack -- -- --output .release
+pnpm install
+pnpm run format:check
+pnpm run check
+pnpm test
+pnpm run release:check
+pnpm run release:pack -- -- --output .release
 ```
 
 After merge, create and verify the tag before creating the GitHub release.
@@ -145,7 +147,7 @@ The globally serialized preparation job:
 
 1. checks out the fully qualified release tag and fetches `origin/main`;
 2. configures the reviewed allowed-signers file;
-3. uses Node 24.18.0 and npm 11.18.0;
+3. uses Node 24.18.0, pnpm 10.34.5, and npm 11.18.0 for pack and publish;
 4. runs the full gate without OIDC publication authority;
 5. prepares, smoke-tests, and hashes the exact tarball; and
 6. uploads `.release` for 30 days with an Actions transport digest.

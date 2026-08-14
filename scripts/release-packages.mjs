@@ -18,7 +18,7 @@ const PACKAGE = {
   name: "@pegma/sessions",
 };
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/sessions.git";
-const REVIEWED_NPM_VERSION = "11.18.0";
+const REVIEWED_PNPM_VERSION = "10.34.5";
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
 export const RELEASE_PACKAGES = [PACKAGE];
@@ -59,13 +59,17 @@ function run(command, arguments_, options = {}) {
 }
 
 function runNpm(arguments_, options = {}) {
-  const npmExecPath = process.env.npm_execpath;
-  return npmExecPath === undefined
-    ? run(process.platform === "win32" ? "npm.cmd" : "npm", arguments_, {
-        ...options,
-        shell: process.platform === "win32",
-      })
-    : run(process.execPath, [npmExecPath, ...arguments_], options);
+  // Always invoke the npm CLI, not npm_execpath. Scripts run under pnpm set
+  // npm_execpath to pnpm, and pack/publish/view must stay on reviewed npm.
+  return run(process.platform === "win32" ? "npm.cmd" : "npm", arguments_, {
+    ...options,
+    shell: process.platform === "win32",
+  });
+}
+
+function pnpmLockfileHasImporter(lockfile, importer) {
+  const escaped = importer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^ {2}${escaped}:$`, "mu").test(lockfile);
 }
 
 function gitCommand() {
@@ -155,18 +159,17 @@ export async function validateRepository(options = {}) {
   const rootManifest = await readJson(join(root, "package.json"));
   const packageDirectory = join(root, "packages", PACKAGE.directory);
   const manifest = await readJson(join(packageDirectory, "package.json"));
-  const lockfile = await readJson(join(root, "package-lock.json"));
-  const rootLockEntry = lockfile.packages?.[""];
-  const lockEntry = lockfile.packages?.[`packages/${PACKAGE.directory}`];
+  const lockfile = await readFile(join(root, "pnpm-lock.yaml"), "utf8");
 
   if (
     rootManifest.private !== true ||
-    rootManifest.packageManager !== `npm@${REVIEWED_NPM_VERSION}` ||
+    rootManifest.packageManager !== `pnpm@${REVIEWED_PNPM_VERSION}` ||
     rootManifest.version !== manifest.version ||
-    rootLockEntry?.version !== rootManifest.version
+    !/^lockfileVersion:/mu.test(lockfile) ||
+    !pnpmLockfileHasImporter(lockfile, ".")
   ) {
     fail(
-      `the private root must share the package version and pin npm@${REVIEWED_NPM_VERSION}`,
+      `the private root must share the package version and pin pnpm@${REVIEWED_PNPM_VERSION}`,
     );
   }
   if (
@@ -213,8 +216,8 @@ export async function validateRepository(options = {}) {
   }
   await stat(join(packageDirectory, "README.md"));
   await stat(join(packageDirectory, "LICENSE"));
-  if (lockEntry?.version !== manifest.version) {
-    fail(`${PACKAGE.name} version is not synchronized with package-lock.json`);
+  if (!pnpmLockfileHasImporter(lockfile, `packages/${PACKAGE.directory}`)) {
+    fail(`${PACKAGE.name} is not present in pnpm-lock.yaml`);
   }
 
   const publicWorkspaces = [];
