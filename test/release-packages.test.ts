@@ -640,6 +640,11 @@ describe("release source authentication", () => {
     );
     expect(verificationScripts).toHaveLength(2);
     expect(verificationScripts[1]).toBe(verificationScripts[0]);
+    const reviewedNpmScripts = workflowRunScripts(workflow).filter((script) =>
+      script.includes("reviewed-npm.XXXXXX"),
+    );
+    expect(reviewedNpmScripts).toHaveLength(2);
+    expect(reviewedNpmScripts[1]).toBe(reviewedNpmScripts[0]);
     expect(
       workflow.match(
         /RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \}\}/gu,
