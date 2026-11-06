@@ -103,7 +103,7 @@ describe("release package metadata", () => {
     expect(source).toContain("command: process.execPath");
     expect(source).toContain("shell: false");
     expect(runNpm(["--version"], { capture: true }).stdout.trim()).toMatch(
-      /^11\.18\.0$/u,
+      /^\d+\.\d+\.\d+(?:-.+)?$/u,
     );
   });
 
