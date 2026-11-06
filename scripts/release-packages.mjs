@@ -733,7 +733,7 @@ export async function prepareRelease(options = {}) {
   ) {
     fail("tarball hashes do not match npm pack metadata");
   }
-  await smokeTestTarball(tarballPath, manifest);
+  await (options.smokeTest ?? smokeTestTarball)(tarballPath, manifest);
 
   const prepared = {
     schemaVersion: 1,

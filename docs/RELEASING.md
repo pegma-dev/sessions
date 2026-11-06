@@ -135,12 +135,12 @@ git switch --detach origin/main
 git config gpg.format ssh
 git config user.signingkey ~/.ssh/pegma-release-signing-key
 git config gpg.ssh.allowedSignersFile ~/.config/pegma/release-allowed-signers
-git tag --sign v0.1.1 --message "Sessions v0.1.1" HEAD
-git verify-tag v0.1.1
-git push origin refs/tags/v0.1.1
-git fetch origin tag v0.1.1 --force
-git verify-tag v0.1.1
-gh release create v0.1.1 --verify-tag --title "@pegma/sessions v0.1.1" --notes-file RELEASE_NOTES.md
+git tag --sign v0.2.0 --message "Sessions v0.2.0" HEAD
+git verify-tag v0.2.0
+git push origin refs/tags/v0.2.0
+git fetch origin tag v0.2.0 --force
+git verify-tag v0.2.0
+gh release create v0.2.0 --verify-tag --title "@pegma/sessions v0.2.0" --notes-file RELEASE_NOTES.md
 ```
 
 Do not let `gh release create` create a tag. Never move or recreate a release

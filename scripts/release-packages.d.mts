@@ -18,6 +18,10 @@ export interface ValidationOptions {
 export interface ReleaseCommandOptions extends ValidationOptions {
   readonly manifest?: string;
   readonly output?: string;
+  readonly smokeTest?: (
+    tarball: string,
+    manifest: PublicPackageManifest,
+  ) => Promise<void>;
 }
 
 export interface PublicPackageManifest {

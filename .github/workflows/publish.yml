@@ -181,7 +181,12 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import { lstatSync, readdirSync } from "node:fs";
+          import {
+            copyFileSync,
+            lstatSync,
+            mkdirSync,
+            readdirSync,
+          } from "node:fs";
           import { join } from "node:path";
 
           const version = process.env.RELEASE_TAG.slice(1);
@@ -202,10 +207,26 @@ jobs:
               throw new Error("prepared entries must be regular files");
             }
           }
+          const uploadDirectory = "release-upload";
+          mkdirSync(uploadDirectory);
+          for (const name of expected) {
+            copyFileSync(join(directory, name), join(uploadDirectory, name));
+          }
+          const uploadEntries = readdirSync(uploadDirectory, {
+            withFileTypes: true,
+          });
+          const uploadNames = uploadEntries.map(({ name }) => name).sort();
+          if (
+            uploadNames.length !== expected.length ||
+            uploadNames.some((name, index) => name !== expected[index]) ||
+            uploadEntries.some((entry) => !entry.isFile())
+          ) {
+            throw new Error("upload file inventory is not exact");
+          }
           NODE
           node --input-type=module >> "${GITHUB_OUTPUT}" <<'NODE'
           const version = process.env.RELEASE_TAG.slice(1);
-          process.stdout.write(`tarball=.release/pegma-sessions-${version}.tgz\n`);
+          process.stdout.write(`tarball=release-upload/pegma-sessions-${version}.tgz\n`);
           NODE
 
       - name: Upload the prepared release
@@ -214,7 +235,7 @@ jobs:
         with:
           name: sessions-release-${{ github.run_id }}
           path: |
-            .release/package-manifest.json
+            release-upload/package-manifest.json
             ${{ steps.inventory.outputs.tarball }}
           if-no-files-found: error
           include-hidden-files: false
@@ -430,7 +451,13 @@ jobs:
             throw new Error("prepared package manifest is invalid");
           }
           const packedPaths = record.files.map(({ path }) => path);
-          for (const required of ["package.json", "README.md", "LICENSE"]) {
+          for (const required of [
+            "package.json",
+            "README.md",
+            "LICENSE",
+            "dist/index.d.ts",
+            "dist/index.js",
+          ]) {
             if (!packedPaths.includes(required)) {
               throw new Error(`package is missing ${required}`);
             }

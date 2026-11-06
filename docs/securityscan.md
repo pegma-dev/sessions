@@ -119,6 +119,10 @@ Review criteria include the hard rules in `AGENTS.md`:
 
 ### 3. Release pipeline — verified sound, two informational observations (Informational)
 
+> Snapshot note: the source-line references and observations below describe
+> the 2026-07-29 revision. See `docs/RELEASING.md` and the current workflow
+> invariant tests for the maintained release path.
+
 - **Severity:** Informational
 - **Files:** `.github/workflows/publish.yml`, `scripts/release-packages.mjs`
 - **Verified good:**

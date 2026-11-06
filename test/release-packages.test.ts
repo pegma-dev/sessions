@@ -420,7 +420,10 @@ importers:
       writeFileSync(join(dist, "stale.js"), "stale output\n");
       writeFileSync(buildInfo, "stale build information\n");
       writeFileSync(rootBuildInfo, "stale root build information\n");
-      const result = await prepareRelease({ output });
+      const result = await prepareRelease({
+        output,
+        smokeTest: async () => undefined,
+      });
       const prepared = result.manifest as {
         package: { integrity: string; sha256: string; tarball: string };
       };
@@ -571,7 +574,10 @@ describe("release source authentication", () => {
     expect(prepare).toContain("rm -rf -- packages/sessions/dist");
     expect(prepare).toContain("-type f -name '*.tsbuildinfo' -delete");
     expect(prepare).toContain("include-hidden-files: false");
-    expect(prepare).toContain(".release/package-manifest.json");
+    expect(prepare).toContain("release-upload/package-manifest.json");
+    expect(prepare).toContain(
+      "tarball=release-upload/pegma-sessions-${version}.tgz",
+    );
     expect(prepare).toContain("steps.inventory.outputs.tarball");
 
     expect(publish).not.toContain("actions/checkout@");
@@ -589,6 +595,8 @@ describe("release source authentication", () => {
     expect(publish).toContain("entry?.isFile() !== true");
     expect(publish).toContain("record.sha256");
     expect(publish).toContain("record.integrity");
+    expect(publish).toContain('"dist/index.d.ts"');
+    expect(publish).toContain('"dist/index.js"');
     expect(publish).toContain("NPM_CONFIG_USERCONFIG");
     expect(publish).toContain("NPM_CONFIG_GLOBALCONFIG");
     expect(publish).toContain('"--provenance"');
@@ -619,6 +627,11 @@ describe("release source authentication", () => {
       expect(publish).toContain(`"${name}"`);
     }
     expect(workflow.match(/git init --quiet --bare/gu)).toHaveLength(2);
+    const verificationScripts = workflowRunScripts(workflow).filter((script) =>
+      script.includes("release-verify.XXXXXX"),
+    );
+    expect(verificationScripts).toHaveLength(2);
+    expect(verificationScripts[1]).toBe(verificationScripts[0]);
     expect(
       workflow.match(
         /RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \}\}/gu,
