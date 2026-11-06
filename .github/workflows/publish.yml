@@ -18,52 +18,94 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     env:
+      CI: "1"
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
       RELEASE_COMMIT: ${{ github.sha }}
       RELEASE_ALLOWED_SIGNERS: ${{ vars.RELEASE_ALLOWED_SIGNERS }}
 
     steps:
-      - name: Check out the release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: refs/tags/${{ github.event.release.tag_name }}
-          fetch-depth: 0
-
-      - name: Fetch the protected release branch
-        run: git fetch --no-tags origin main:refs/remotes/origin/main
-
-      - name: Configure approved release signers
+      - name: Verify the release source
         shell: bash
         run: |
+          set -euo pipefail
+          if [[ "${RELEASE_PRERELEASE}" != "false" ]]; then
+            echo "::error::Only stable releases are supported"
+            exit 1
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$ ]] || [[ "${RELEASE_TAG}" == "v0.1.0" ]]; then
+            echo "::error::Release tag must be a supported stable version"
+            exit 1
+          fi
+          if [[ ! "${RELEASE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release commit must be an exact commit ID"
+            exit 1
+          fi
           if [[ -z "${RELEASE_ALLOWED_SIGNERS}" ]]; then
             echo "::error::RELEASE_ALLOWED_SIGNERS must contain the reviewed SSH allowed-signers entries"
             exit 1
           fi
+
           allowed_signers="${RUNNER_TEMP}/release-allowed-signers"
           umask 077
+          : > "${allowed_signers}"
+          chmod 0600 "${allowed_signers}"
           printf '%s\n' "${RELEASE_ALLOWED_SIGNERS}" > "${allowed_signers}"
+
+          scratch="$(mktemp -d "${RUNNER_TEMP}/release-verify.XXXXXX")"
+          trap 'rm -rf -- "${scratch}"' EXIT
+          repository="${scratch}/repository.git"
+          git init --quiet --bare "${repository}"
+          git -C "${repository}" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "${repository}" config gpg.format ssh
+          git -C "${repository}" config gpg.ssh.allowedSignersFile "${allowed_signers}"
+          git -C "${repository}" fetch --quiet --no-tags origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+
+          tag_ref="refs/tags/${RELEASE_TAG}"
+          [[ "$(git -C "${repository}" cat-file -t "${tag_ref}")" == "tag" ]]
+          git -C "${repository}" verify-tag "${tag_ref}"
+          tag_commit="$(git -C "${repository}" rev-parse --verify "${tag_ref}^{commit}")"
+          [[ "${tag_commit}" == "${RELEASE_COMMIT}" ]]
+          git -C "${repository}" merge-base --is-ancestor \
+            "${RELEASE_COMMIT}" refs/remotes/origin/main
+
+      - name: Check out the verified release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Fetch verified release refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed_signers="${RUNNER_TEMP}/release-allowed-signers"
           git config --local gpg.format ssh
           git config --local gpg.ssh.allowedSignersFile "${allowed_signers}"
-
-      - name: Enable Corepack
-        run: corepack enable
+          git fetch --quiet --no-tags origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24.18.0
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Activate pnpm
+      - name: Enable Corepack
         run: corepack enable
 
       - name: Use the reviewed npm release
-        run: npm install --global npm@11.18.0
+        run: npm install --global npm@11.18.0 --ignore-scripts
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Check release metadata
+        run: pnpm run release:check
 
       - name: Check formatting
         run: pnpm run format:check
@@ -74,22 +116,66 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Remove generated package outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- packages/sessions/dist
+          find packages/sessions -type f -name '*.tsbuildinfo' -delete
+
       - name: Prepare and verify the release tarball
         run: pnpm run release:pack -- -- --require-clean --require-main-ancestor --require-release-tag --expected-release-commit "${RELEASE_COMMIT}" --output .release
+
+      - name: Check the prepared file inventory
+        id: inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { lstatSync, readdirSync } from "node:fs";
+          import { join } from "node:path";
+
+          const version = process.env.RELEASE_TAG.slice(1);
+          const tarball = `pegma-sessions-${version}.tgz`;
+          const expected = ["package-manifest.json", tarball].sort();
+          const directory = ".release";
+          const entries = readdirSync(directory, { withFileTypes: true });
+          const names = entries.map(({ name }) => name).sort();
+          if (
+            names.length !== expected.length ||
+            names.some((name, index) => name !== expected[index])
+          ) {
+            throw new Error("prepared file inventory is not exact");
+          }
+          for (const name of expected) {
+            const entry = entries.find((candidate) => candidate.name === name);
+            if (entry?.isFile() !== true || !lstatSync(join(directory, name)).isFile()) {
+              throw new Error("prepared entries must be regular files");
+            }
+          }
+          NODE
+          node --input-type=module >> "${GITHUB_OUTPUT}" <<'NODE'
+          const version = process.env.RELEASE_TAG.slice(1);
+          process.stdout.write(`tarball=.release/pegma-sessions-${version}.tgz\n`);
+          NODE
 
       - name: Upload the prepared release
         id: upload
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: sessions-release-${{ github.run_id }}
-          path: .release/
+          path: |
+            .release/package-manifest.json
+            ${{ steps.inventory.outputs.tarball }}
           if-no-files-found: error
-          include-hidden-files: true
+          include-hidden-files: false
           overwrite: true
           retention-days: 30
 
       - name: Record the prepared artifact digest
-        run: echo "Prepared artifact SHA-256 ${{ steps.upload.outputs.artifact-digest }}" >> "${GITHUB_STEP_SUMMARY}"
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: echo "Prepared artifact SHA-256 ${ARTIFACT_DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
 
   publish:
     needs: prepare
@@ -99,28 +185,267 @@ jobs:
       contents: read
       id-token: write
     env:
+      CI: "1"
       RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
       RELEASE_COMMIT: ${{ github.sha }}
+      RELEASE_ALLOWED_SIGNERS: ${{ vars.RELEASE_ALLOWED_SIGNERS }}
+      RELEASE_DIRECTORY: ${{ runner.temp }}/sessions-release/.release
 
     steps:
-      - name: Check out the exact release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: refs/tags/${{ github.event.release.tag_name }}
-          fetch-depth: 1
+      - name: Verify the release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${RELEASE_PRERELEASE}" != "false" ]]; then
+            echo "::error::Only stable releases are supported"
+            exit 1
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$ ]] || [[ "${RELEASE_TAG}" == "v0.1.0" ]]; then
+            echo "::error::Release tag must be a supported stable version"
+            exit 1
+          fi
+          if [[ ! "${RELEASE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release commit must be an exact commit ID"
+            exit 1
+          fi
+          if [[ -z "${RELEASE_ALLOWED_SIGNERS}" ]]; then
+            echo "::error::RELEASE_ALLOWED_SIGNERS must contain the reviewed SSH allowed-signers entries"
+            exit 1
+          fi
 
-      - name: Set up Node.js and the npm registry
+          allowed_signers="${RUNNER_TEMP}/release-allowed-signers"
+          umask 077
+          : > "${allowed_signers}"
+          chmod 0600 "${allowed_signers}"
+          printf '%s\n' "${RELEASE_ALLOWED_SIGNERS}" > "${allowed_signers}"
+
+          scratch="$(mktemp -d "${RUNNER_TEMP}/release-verify.XXXXXX")"
+          trap 'rm -rf -- "${scratch}"' EXIT
+          repository="${scratch}/repository.git"
+          git init --quiet --bare "${repository}"
+          git -C "${repository}" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "${repository}" config gpg.format ssh
+          git -C "${repository}" config gpg.ssh.allowedSignersFile "${allowed_signers}"
+          git -C "${repository}" fetch --quiet --no-tags origin \
+            refs/heads/main:refs/remotes/origin/main \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+
+          tag_ref="refs/tags/${RELEASE_TAG}"
+          [[ "$(git -C "${repository}" cat-file -t "${tag_ref}")" == "tag" ]]
+          git -C "${repository}" verify-tag "${tag_ref}"
+          tag_commit="$(git -C "${repository}" rev-parse --verify "${tag_ref}^{commit}")"
+          [[ "${tag_commit}" == "${RELEASE_COMMIT}" ]]
+          git -C "${repository}" merge-base --is-ancestor \
+            "${RELEASE_COMMIT}" refs/remotes/origin/main
+
+      - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24.18.0
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
+
+      - name: Use the reviewed npm release
+        run: npm install --global npm@11.18.0 --ignore-scripts
 
       - name: Download the prepared release
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sessions-release-${{ github.run_id }}
-          path: .release
+          path: ${{ env.RELEASE_DIRECTORY }}
 
-      - name: Publish the verified prepared tarball
-        run: node scripts/release-packages.mjs publish --expected-release-commit "${RELEASE_COMMIT}" --manifest .release/package-manifest.json
+      - name: Publish the prepared tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { spawnSync } from "node:child_process";
+          import { createHash, timingSafeEqual } from "node:crypto";
+          import {
+            chmodSync,
+            existsSync,
+            lstatSync,
+            mkdirSync,
+            mkdtempSync,
+            readFileSync,
+            readdirSync,
+            realpathSync,
+            rmSync,
+            writeFileSync,
+          } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { basename, dirname, join, resolve } from "node:path";
+
+          const PACKAGE_NAME = "@pegma/sessions";
+          const REGISTRY = "https://registry.npmjs.org/";
+          const directory = resolve(process.env.RELEASE_DIRECTORY);
+          const version = process.env.RELEASE_TAG.slice(1);
+          const expectedTarball = `pegma-sessions-${version}.tgz`;
+          const expectedNames = ["package-manifest.json", expectedTarball].sort();
+          const entries = readdirSync(directory, { withFileTypes: true });
+          const names = entries.map(({ name }) => name).sort();
+          if (
+            names.length !== expectedNames.length ||
+            names.some((name, index) => name !== expectedNames[index])
+          ) {
+            throw new Error("prepared file inventory is not exact");
+          }
+          for (const name of expectedNames) {
+            const entry = entries.find((candidate) => candidate.name === name);
+            if (entry?.isFile() !== true || !lstatSync(join(directory, name)).isFile()) {
+              throw new Error("prepared entries must be regular files");
+            }
+          }
+
+          const hasExactKeys = (value, expected) => {
+            if (value === null || typeof value !== "object" || Array.isArray(value)) {
+              return false;
+            }
+            const actual = Object.keys(value).sort();
+            const keys = [...expected].sort();
+            return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+          };
+          const manifestPath = join(directory, "package-manifest.json");
+          const prepared = JSON.parse(readFileSync(manifestPath, "utf8"));
+          const record = prepared.package;
+          if (
+            !hasExactKeys(prepared, ["gitCommit", "package", "releaseTag", "schemaVersion", "version"]) ||
+            !hasExactKeys(record, ["files", "integrity", "name", "sha256", "shasum", "tarball", "version"]) ||
+            prepared.schemaVersion !== 1 ||
+            prepared.version !== version ||
+            prepared.releaseTag !== process.env.RELEASE_TAG ||
+            prepared.gitCommit !== process.env.RELEASE_COMMIT ||
+            record.name !== PACKAGE_NAME ||
+            record.version !== version ||
+            record.tarball !== expectedTarball ||
+            !/^[0-9a-f]{64}$/u.test(record.sha256) ||
+            !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(record.integrity) ||
+            !/^[0-9a-f]{40}$/u.test(record.shasum) ||
+            !Array.isArray(record.files) ||
+            record.files.some((file) =>
+              !hasExactKeys(file, ["path", "size"]) ||
+              typeof file.path !== "string" ||
+              file.path.length === 0 ||
+              !Number.isSafeInteger(file.size) ||
+              file.size < 0,
+            )
+          ) {
+            throw new Error("prepared package manifest is invalid");
+          }
+          const packedPaths = record.files.map(({ path }) => path);
+          for (const required of ["package.json", "README.md", "LICENSE"]) {
+            if (!packedPaths.includes(required)) {
+              throw new Error(`package is missing ${required}`);
+            }
+          }
+          if (packedPaths.some((path) =>
+            !["package.json", "README.md", "LICENSE"].includes(path) && !path.startsWith("dist/"),
+          )) {
+            throw new Error("package file inventory is not expected");
+          }
+
+          const tarballPath = join(directory, expectedTarball);
+          if (basename(tarballPath) !== expectedTarball || dirname(tarballPath) !== directory) {
+            throw new Error("prepared tarball path is invalid");
+          }
+          const bytes = readFileSync(tarballPath);
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+          const shasum = createHash("sha1").update(bytes).digest("hex");
+          const equal = (left, right) => {
+            const leftBytes = Buffer.from(left);
+            const rightBytes = Buffer.from(right);
+            return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+          };
+          if (!equal(sha256, record.sha256) || !equal(integrity, record.integrity) || !equal(shasum, record.shasum)) {
+            throw new Error("prepared tarball digests do not match");
+          }
+
+          const executableDirectory = dirname(process.execPath);
+          const npmCandidates = [
+            join(executableDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+            resolve(executableDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+          ];
+          const npmCliCandidate = npmCandidates.find(existsSync);
+          if (npmCliCandidate === undefined) {
+            throw new Error("npm CLI was not found beside Node.js");
+          }
+          const npmCli = realpathSync(npmCliCandidate);
+          const runtimeRoot = mkdtempSync(join(tmpdir(), "sessions-publish-"));
+          const cwd = join(runtimeRoot, "cwd");
+          const userConfig = join(runtimeRoot, "user.npmrc");
+          const globalConfig = join(runtimeRoot, "global.npmrc");
+          mkdirSync(cwd, { mode: 0o700 });
+          writeFileSync(userConfig, "", { mode: 0o600 });
+          writeFileSync(globalConfig, "", { mode: 0o600 });
+          chmodSync(userConfig, 0o600);
+          chmodSync(globalConfig, 0o600);
+
+          const allowedNames = new Set([
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
+            "CI",
+            "HOME",
+            "PATH",
+            "SystemRoot",
+            "SYSTEMROOT",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+          ]);
+          const env = {};
+          for (const [name, value] of Object.entries(process.env)) {
+            if (value !== undefined && (allowedNames.has(name) || name.startsWith("GITHUB_"))) {
+              env[name] = value;
+            }
+          }
+          env.NPM_CONFIG_USERCONFIG = userConfig;
+          env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
+
+          const npm = (arguments_, allowFailure = false) => {
+            const result = spawnSync(process.execPath, [npmCli, ...arguments_], {
+              cwd,
+              env,
+              encoding: "utf8",
+              stdio: "pipe",
+            });
+            if (result.error) throw result.error;
+            if (result.status !== 0 && !allowFailure) {
+              throw new Error(`npm failed with exit code ${String(result.status)}:\n${result.stdout}\n${result.stderr}`);
+            }
+            return result;
+          };
+
+          try {
+            const npmVersion = npm(["--version"]).stdout.trim();
+            if (npmVersion !== "11.18.0") {
+              throw new Error(`unexpected npm version ${npmVersion}`);
+            }
+            const spec = `${PACKAGE_NAME}@${version}`;
+            const lookup = npm(["view", spec, "dist.integrity", "--json", "--registry", REGISTRY], true);
+            if (lookup.status === 0) {
+              const publishedIntegrity = JSON.parse(lookup.stdout);
+              if (!equal(record.integrity, publishedIntegrity)) {
+                throw new Error("registry version has different package integrity");
+              }
+              process.stdout.write(`Verified existing ${spec}; skipping.\n`);
+            } else {
+              const lookupOutput = `${lookup.stdout}\n${lookup.stderr}`;
+              if (!/\bE404\b/u.test(lookupOutput)) {
+                throw new Error(`npm registry lookup failed:\n${lookupOutput.trim()}`);
+              }
+              npm([
+                "publish",
+                tarballPath,
+                "--access",
+                "public",
+                "--registry",
+                REGISTRY,
+                "--provenance",
+                "--ignore-scripts",
+              ]);
+            }
+          } finally {
+            rmSync(runtimeRoot, { recursive: true, force: true });
+          }
+          NODE

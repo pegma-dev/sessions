@@ -54,6 +54,16 @@ export interface ParsedPnpmLock {
 
 export const RELEASE_PACKAGES: readonly ReleasePackageDefinition[];
 
+export interface IsolatedNpmRuntime {
+  readonly command: string;
+  readonly argumentsPrefix: readonly string[];
+  readonly cwd: string;
+  readonly env: Readonly<Record<string, string>>;
+  readonly userConfig: string;
+  readonly globalConfig: string;
+  cleanup(): void;
+}
+
 export function parseArguments(
   arguments_: readonly string[],
 ): ReleaseCommandOptions;
@@ -67,6 +77,31 @@ export function validateReleaseTag(options?: {
   readonly releaseTag?: string;
   readonly expectedReleaseCommit?: string;
 }): { headCommit: string; releaseTag: string };
+
+export function isSupportedReleaseTag(releaseTag: string): boolean;
+
+export function isolatedNpmEnvironment(
+  source: Readonly<Record<string, string | undefined>>,
+  userConfig: string,
+  globalConfig: string,
+): Record<string, string>;
+
+export function createIsolatedNpmRuntime(
+  source?: Readonly<Record<string, string | undefined>>,
+): IsolatedNpmRuntime;
+
+export function runNpm(
+  arguments_: readonly string[],
+  options?: {
+    readonly capture?: boolean;
+    readonly allowFailure?: boolean;
+  },
+): SpawnSyncReturns<string>;
+
+export function validateReleaseInventory(
+  directory: string,
+  expectedTarball?: string,
+): Promise<{ tarball: string }>;
 
 export function decidePublication(
   localIntegrity: string,
@@ -97,3 +132,4 @@ export function inspectPreparedRegistry(
 export function publishPreparedRelease(
   options?: ReleaseCommandOptions,
 ): Promise<void>;
+import type { SpawnSyncReturns } from "node:child_process";

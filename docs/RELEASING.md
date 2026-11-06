@@ -60,7 +60,7 @@ The release tool verifies that:
 - every exported file exists and a clean consumer can import the package;
   and
 - the prepared manifest records the exact commit, tag, file inventory,
-  SHA-1, and SHA-512 integrity.
+  SHA-1, SHA-256, and SHA-512 integrity.
 
 For a GitHub release, preparation additionally requires a stable annotated
 `vX.Y.Z` tag signed by an approved signer. The tag must match the manifest
@@ -118,10 +118,10 @@ npm install -g corepack
 corepack enable
 npm install --global npm@11.18.0
 pnpm install
+pnpm run release:check
 pnpm run format:check
 pnpm run check
 pnpm test
-pnpm run release:check
 pnpm run release:pack -- -- --output .release
 ```
 
@@ -149,16 +149,27 @@ tag; if any byte must change, prepare a new version.
 
 The globally serialized preparation job:
 
-1. checks out the fully qualified release tag and fetches `origin/main`;
-2. configures the reviewed allowed-signers file;
-3. uses Node 24.18.0, pnpm 10.34.5, and npm 11.18.0 for pack and publish;
-4. runs the full gate without OIDC publication authority;
-5. prepares, smoke-tests, and hashes the exact tarball; and
-6. uploads `.release` for 30 days with an Actions transport digest.
+1. validates the stable version floor and release event fields from the
+   environment;
+2. fetches only `origin/main` and the named tag into a scratch bare Git
+   repository, then verifies the annotated tag, approved signature, exact
+   event commit, and `origin/main` ancestry;
+3. checks out the already verified commit by exact SHA without persisted Git
+   credentials;
+4. uses Node 24.18.0, pnpm 10.34.5, and npm 11.18.0 for validation and pack;
+5. runs the full gate without OIDC publication authority;
+6. removes generated build outputs, performs a clean build, smoke-tests the
+   package, and records the exact tarball digests; and
+7. uploads only the regular manifest and tarball files for 30 days with an
+   Actions transport digest.
 
 Only the `npm-publish` job receives `id-token: write`. It downloads the
-prepared artifact, installs no dependencies, rechecks the commit, tag,
-manifest, and tarball hashes, and publishes with provenance.
+prepared artifact without a repository checkout, repeats the bare Git tag
+verification, and validates the two-file inventory, manifest schema, commit,
+version, and tarball digests using workflow-owned inline code. It runs the
+reviewed npm CLI from an empty temporary directory with empty private npm
+configuration files and an allowlisted environment, then publishes the
+absolute tarball path with provenance and lifecycle scripts disabled.
 
 If a hardened release fails, rerun its failed jobs against the unchanged tag:
 
