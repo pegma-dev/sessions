@@ -581,6 +581,9 @@ describe("release source authentication", () => {
     expect(prepare).toContain("steps.inventory.outputs.tarball");
 
     expect(publish).not.toContain("actions/checkout@");
+    const publishSteps = publish.indexOf("\n    steps:");
+    expect(publishSteps).toBeGreaterThanOrEqual(0);
+    expect(publish.slice(0, publishSteps)).not.toContain("${{ runner.");
     expect(publish).not.toContain("pnpm install");
     expect(publish).not.toContain("release:pack");
     expect(publish).not.toContain("scripts/release-packages.mjs");
@@ -599,6 +602,9 @@ describe("release source authentication", () => {
     expect(publish).toContain('"dist/index.js"');
     expect(publish).toContain("NPM_CONFIG_USERCONFIG");
     expect(publish).toContain("NPM_CONFIG_GLOBALCONFIG");
+    expect(publish).toContain(
+      "RELEASE_DIRECTORY: ${{ runner.temp }}/sessions-release/.release",
+    );
     expect(publish).toContain('"--provenance"');
     expect(publish).toContain('"--ignore-scripts"');
     expect(publish).toContain('"--registry"');

@@ -260,7 +260,6 @@ jobs:
       RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
       RELEASE_COMMIT: ${{ github.sha }}
       RELEASE_ALLOWED_SIGNERS: ${{ vars.RELEASE_ALLOWED_SIGNERS }}
-      RELEASE_DIRECTORY: ${{ runner.temp }}/sessions-release/.release
       REVIEWED_NPM_TARBALL: https://registry.npmjs.org/npm/-/npm-11.18.0.tgz
       REVIEWED_NPM_INTEGRITY: sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w==
 
@@ -370,9 +369,11 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sessions-release-${{ github.run_id }}
-          path: ${{ env.RELEASE_DIRECTORY }}
+          path: ${{ runner.temp }}/sessions-release/.release
 
       - name: Publish the prepared tarball
+        env:
+          RELEASE_DIRECTORY: ${{ runner.temp }}/sessions-release/.release
         shell: bash
         run: |
           set -euo pipefail
