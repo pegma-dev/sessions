@@ -170,7 +170,7 @@ jobs:
           set -euo pipefail
           rm -rf -- packages/sessions/dist
           find . -path './node_modules' -prune -o \
-            -type f -name '*.tsbuildinfo' -delete
+            -type f -name '*.tsbuildinfo' -exec rm -f -- {} +
 
       - name: Prepare and verify the release tarball
         run: pnpm run release:pack -- -- --require-clean --require-main-ancestor --require-release-tag --expected-release-commit "${RELEASE_COMMIT}" --output .release

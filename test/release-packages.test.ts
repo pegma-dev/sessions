@@ -572,7 +572,9 @@ describe("release source authentication", () => {
     expect(prepare).toContain("persist-credentials: false");
     expect(prepare).toContain("pnpm run release:check");
     expect(prepare).toContain("rm -rf -- packages/sessions/dist");
-    expect(prepare).toContain("-type f -name '*.tsbuildinfo' -delete");
+    expect(prepare).toContain(
+      "-type f -name '*.tsbuildinfo' -exec rm -f -- {} +",
+    );
     expect(prepare).toContain("include-hidden-files: false");
     expect(prepare).toContain("release-upload/package-manifest.json");
     expect(prepare).toContain(
