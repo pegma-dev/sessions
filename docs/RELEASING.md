@@ -50,7 +50,8 @@ The release tool verifies that:
 - the root pins `pnpm@10.34.5` and `pnpm-lock.yaml` matches each
   dependency, including `peerDependencies`, to its own specifier and a
   resolved version that satisfies that specifier;
-- pack and trusted publish still use reviewed `npm@11.18.0`;
+- pack and trusted publish use reviewed `npm@11.18.0`, downloaded from its
+  fixed registry URL and matched to the repository-recorded SHA-512 value;
 - `@pegma/sessions` is public MIT-licensed ESM for Node 22 or newer;
 - runtime dependencies are pinned exactly;
 - repository metadata points to `pegma-dev/sessions`;
@@ -60,7 +61,7 @@ The release tool verifies that:
 - every exported file exists and a clean consumer can import the package;
   and
 - the prepared manifest records the exact commit, tag, file inventory,
-  SHA-1, and SHA-512 integrity.
+  SHA-1, SHA-256, and SHA-512 integrity.
 
 For a GitHub release, preparation additionally requires a stable annotated
 `vX.Y.Z` tag signed by an approved signer. The tag must match the manifest
@@ -118,10 +119,10 @@ npm install -g corepack
 corepack enable
 npm install --global npm@11.18.0
 pnpm install
+pnpm run release:check
 pnpm run format:check
 pnpm run check
 pnpm test
-pnpm run release:check
 pnpm run release:pack -- -- --output .release
 ```
 
@@ -134,12 +135,12 @@ git switch --detach origin/main
 git config gpg.format ssh
 git config user.signingkey ~/.ssh/pegma-release-signing-key
 git config gpg.ssh.allowedSignersFile ~/.config/pegma/release-allowed-signers
-git tag --sign v0.1.1 --message "Sessions v0.1.1" HEAD
-git verify-tag v0.1.1
-git push origin refs/tags/v0.1.1
-git fetch origin tag v0.1.1 --force
-git verify-tag v0.1.1
-gh release create v0.1.1 --verify-tag --title "@pegma/sessions v0.1.1" --notes-file RELEASE_NOTES.md
+git tag --sign v0.2.0 --message "Sessions v0.2.0" HEAD
+git verify-tag v0.2.0
+git push origin refs/tags/v0.2.0
+git fetch origin tag v0.2.0 --force
+git verify-tag v0.2.0
+gh release create v0.2.0 --verify-tag --title "@pegma/sessions v0.2.0" --notes-file RELEASE_NOTES.md
 ```
 
 Do not let `gh release create` create a tag. Never move or recreate a release
@@ -149,16 +150,29 @@ tag; if any byte must change, prepare a new version.
 
 The globally serialized preparation job:
 
-1. checks out the fully qualified release tag and fetches `origin/main`;
-2. configures the reviewed allowed-signers file;
-3. uses Node 24.18.0, pnpm 10.34.5, and npm 11.18.0 for pack and publish;
-4. runs the full gate without OIDC publication authority;
-5. prepares, smoke-tests, and hashes the exact tarball; and
-6. uploads `.release` for 30 days with an Actions transport digest.
+1. validates the stable version floor and release event fields from the
+   environment;
+2. fetches only `origin/main` and the named tag into a scratch bare Git
+   repository, then verifies the annotated tag, approved signature, exact
+   event commit, and `origin/main` ancestry;
+3. checks out the already verified commit by exact SHA without persisted Git
+   credentials;
+4. uses Node 24.18.0, pnpm 10.34.5, and the SHA-512-matched npm 11.18.0
+   tarball for validation and pack;
+5. runs the full gate without OIDC publication authority;
+6. removes generated build outputs, performs a clean build, smoke-tests the
+   package, and records the exact tarball digests; and
+7. uploads only the regular manifest and tarball files for 30 days with an
+   Actions transport digest.
 
 Only the `npm-publish` job receives `id-token: write`. It downloads the
-prepared artifact, installs no dependencies, rechecks the commit, tag,
-manifest, and tarball hashes, and publishes with provenance.
+prepared artifact without a repository checkout, repeats the bare Git tag
+verification, and validates the two-file inventory, manifest schema, commit,
+version, and tarball digests using workflow-owned inline code. It runs the
+reviewed npm CLI from an empty temporary directory with empty private npm
+configuration files and an allowlisted environment, then publishes the
+absolute tarball path with provenance and lifecycle scripts disabled. After a
+new publication, it waits for the registry to report the prepared integrity.
 
 If a hardened release fails, rerun its failed jobs against the unchanged tag:
 

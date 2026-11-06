@@ -17,6 +17,8 @@ jobs:
   validate:
     name: Node.js ${{ matrix.node-version }}
     runs-on: ubuntu-latest
+    env:
+      CI: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +43,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Check release metadata
+        run: pnpm run release:check
 
       - name: Check formatting
         run: pnpm run format:check

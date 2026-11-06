@@ -1,15 +1,30 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   RELEASE_PACKAGES,
+  createIsolatedNpmRuntime,
   decidePublication,
+  isSupportedReleaseTag,
+  isolatedNpmEnvironment,
   parseArguments,
   parsePnpmLockImporters,
+  prepareRelease,
   resolvedVersionSatisfies,
+  runNpm,
   validateLockImporter,
+  validateReleaseInventory,
   validateReleaseTag,
   validateRepository,
 } from "../scripts/release-packages.mjs";
@@ -32,6 +47,33 @@ function run(command: string, arguments_: string[], cwd?: string): string {
   }).trim();
 }
 
+function workflowRunScripts(workflow: string): string[] {
+  const lines = workflow.split(/\r?\n/u);
+  const scripts: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^(\s*)run:\s*(.*)$/u.exec(lines[index] ?? "");
+    if (match === null) continue;
+    const runValue = match[2] ?? "";
+    if (!/^[|>][+-]?$/u.test(runValue)) {
+      scripts.push(runValue);
+      continue;
+    }
+    const indentation = (match[1] ?? "").length;
+    const block: string[] = [];
+    for (index += 1; index < lines.length; index += 1) {
+      const line = lines[index] ?? "";
+      const lineIndentation = /^\s*/u.exec(line)?.[0].length ?? 0;
+      if (line !== "" && lineIndentation <= indentation) {
+        index -= 1;
+        break;
+      }
+      block.push(line);
+    }
+    scripts.push(block.join("\n"));
+  }
+  return scripts;
+}
+
 describe("release package metadata", () => {
   it("accepts npm's cross-platform argument separator", () => {
     expect(parseArguments(["--", "--output", ".release"])).toEqual({
@@ -51,15 +93,76 @@ describe("release package metadata", () => {
     });
   });
 
-  it("never routes pack, view, or publish through npm_execpath", () => {
+  it("resolves npm beside Node and does not use a package-manager wrapper", () => {
     const source = readFileSync(
       join(process.cwd(), "scripts", "release-packages.mjs"),
       "utf8",
     );
     expect(source).not.toContain("process.env.npm_execpath");
-    expect(source).toContain(
-      'process.platform === "win32" ? "npm.cmd" : "npm"',
+    expect(source).toContain('"npm", "bin", "npm-cli.js"');
+    expect(source).toContain("command: process.execPath");
+    expect(source).toContain("shell: false");
+    expect(source).toContain('runNpm(["--prefix", root, "run", "build"]);');
+    expect(runNpm(["--version"], { capture: true }).stdout.trim()).toMatch(
+      /^\d+\.\d+\.\d+(?:-.+)?$/u,
     );
+  });
+
+  it("uses private npm configuration and an allowlisted environment", () => {
+    const source = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      SystemRoot: process.env.SystemRoot,
+      TEMP: process.env.TEMP,
+      CI: "1",
+      GITHUB_ACTIONS: "true",
+      GITHUB_REPOSITORY: "pegma-dev/sessions",
+      ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.test/id-token",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+      npm_config_registry: "https://example.test/registry",
+      NPM_CONFIG_CACHE: "cache",
+      NPM_TOKEN: "package-token",
+      NODE_AUTH_TOKEN: "node-token",
+      NODE_OPTIONS: "--inspect",
+      NODE_EXTRA_CA_CERTS: "ca.pem",
+      HTTPS_PROXY: "https://example.test/proxy",
+    };
+    const env = isolatedNpmEnvironment(source, "user-config", "global-config");
+    expect(env).toMatchObject({
+      CI: "1",
+      GITHUB_ACTIONS: "true",
+      GITHUB_REPOSITORY: "pegma-dev/sessions",
+      ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.test/id-token",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+      NPM_CONFIG_USERCONFIG: "user-config",
+      NPM_CONFIG_GLOBALCONFIG: "global-config",
+    });
+    for (const name of [
+      "npm_config_registry",
+      "NPM_CONFIG_CACHE",
+      "NPM_TOKEN",
+      "NODE_AUTH_TOKEN",
+      "NODE_OPTIONS",
+      "NODE_EXTRA_CA_CERTS",
+      "HTTPS_PROXY",
+    ]) {
+      expect(env).not.toHaveProperty(name);
+    }
+
+    const runtime = createIsolatedNpmRuntime(source);
+    try {
+      expect(readdirSync(runtime.cwd)).toEqual([]);
+      if (process.platform !== "win32") {
+        expect(statSync(runtime.userConfig).mode & 0o777).toBe(0o600);
+        expect(statSync(runtime.globalConfig).mode & 0o777).toBe(0o600);
+      }
+      expect(readFileSync(runtime.userConfig, "utf8")).toBe("");
+      expect(readFileSync(runtime.globalConfig, "utf8")).toBe("");
+      expect(runtime.command).toBe(process.execPath);
+      expect(runtime.argumentsPrefix[0]).toMatch(/npm-cli\.js$/u);
+    } finally {
+      runtime.cleanup();
+    }
   });
 
   it("matches each lockfile dependency to its own specifier and resolved version", () => {
@@ -254,6 +357,92 @@ importers:
       }),
     ).rejects.toThrow("prereleases cannot publish packages");
   });
+
+  it("accepts only stable release tags at or above the supported floor", () => {
+    expect(isSupportedReleaseTag("v0.1.1")).toBe(true);
+    expect(isSupportedReleaseTag("v0.12.0")).toBe(true);
+    expect(isSupportedReleaseTag("v1.0.0")).toBe(true);
+    expect(isSupportedReleaseTag("v0.1.0")).toBe(false);
+    expect(isSupportedReleaseTag("v0.0.9")).toBe(false);
+    expect(isSupportedReleaseTag("v01.2.3")).toBe(false);
+    expect(isSupportedReleaseTag("v1.01.0")).toBe(false);
+    expect(isSupportedReleaseTag("v0.1.01")).toBe(false);
+    expect(isSupportedReleaseTag("v1.2.3-beta.1")).toBe(false);
+  });
+
+  it("requires an exact regular-file release inventory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "sessions-release-inventory-"));
+    const directory = join(root, "release");
+    const tarball = "pegma-sessions-0.1.1.tgz";
+    try {
+      mkdirSync(directory);
+      writeFileSync(join(directory, "package-manifest.json"), "{}\n");
+      writeFileSync(join(directory, tarball), "package bytes");
+      await expect(
+        validateReleaseInventory(directory, tarball),
+      ).resolves.toEqual({ tarball });
+
+      writeFileSync(join(directory, ".extra"), "extra");
+      await expect(
+        validateReleaseInventory(directory, tarball),
+      ).rejects.toThrow("only the manifest and package tarball");
+      rmSync(join(directory, ".extra"));
+
+      rmSync(join(directory, tarball));
+      mkdirSync(join(directory, tarball));
+      await expect(
+        validateReleaseInventory(directory, tarball),
+      ).rejects.toThrow("regular files");
+      rmSync(join(directory, tarball), { recursive: true });
+
+      if (process.platform !== "win32") {
+        const target = join(root, "target.tgz");
+        writeFileSync(target, "package bytes");
+        symlinkSync(target, join(directory, tarball), "file");
+        await expect(
+          validateReleaseInventory(directory, tarball),
+        ).rejects.toThrow("regular files");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes generated outputs before building and records both digests", async () => {
+    const packageDirectory = join(process.cwd(), "packages", "sessions");
+    const dist = join(packageDirectory, "dist");
+    const buildInfo = join(packageDirectory, "tsconfig.tsbuildinfo");
+    const rootBuildInfo = join(process.cwd(), "tsconfig.tsbuildinfo");
+    const root = mkdtempSync(join(tmpdir(), "sessions-release-pack-"));
+    const output = join(root, "release");
+    try {
+      mkdirSync(dist, { recursive: true });
+      writeFileSync(join(dist, "stale.js"), "stale output\n");
+      writeFileSync(buildInfo, "stale build information\n");
+      writeFileSync(rootBuildInfo, "stale root build information\n");
+      const result = await prepareRelease({
+        output,
+        smokeTest: async () => undefined,
+      });
+      const prepared = result.manifest as {
+        package: { integrity: string; sha256: string; tarball: string };
+      };
+      expect(() => statSync(join(dist, "stale.js"))).toThrow();
+      expect(() => statSync(rootBuildInfo)).toThrow();
+      expect(prepared.package.sha256).toMatch(/^[0-9a-f]{64}$/u);
+      expect(prepared.package.integrity).toMatch(
+        /^sha512-[A-Za-z0-9+/]{86}==$/u,
+      );
+      await expect(
+        validateReleaseInventory(output, prepared.package.tarball),
+      ).resolves.toEqual({ tarball: prepared.package.tarball });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(dist, { recursive: true, force: true });
+      rmSync(buildInfo, { force: true });
+      rmSync(rootBuildInfo, { force: true });
+    }
+  }, 120_000);
 });
 
 describe("release source authentication", () => {
@@ -291,20 +480,20 @@ describe("release source authentication", () => {
       run(git, ["config", "user.signingkey", signingKey], root);
       run(git, ["config", "gpg.ssh.allowedSignersFile", allowedSigners], root);
 
-      run(git, ["tag", "--sign", "v0.0.0", "--message", "signed"], root);
+      run(git, ["tag", "--sign", "v0.1.1", "--message", "signed"], root);
       expect(
         validateReleaseTag({
           root,
-          releaseTag: "v0.0.0",
+          releaseTag: "v0.1.1",
           expectedReleaseCommit: releaseCommit,
         }),
-      ).toEqual({ headCommit: releaseCommit, releaseTag: "v0.0.0" });
+      ).toEqual({ headCommit: releaseCommit, releaseTag: "v0.1.1" });
 
-      run(git, ["tag", "v0.0.1"], root);
+      run(git, ["tag", "v0.1.2"], root);
       expect(() =>
         validateReleaseTag({
           root,
-          releaseTag: "v0.0.1",
+          releaseTag: "v0.1.2",
           expectedReleaseCommit: releaseCommit,
         }),
       ).toThrow("annotated tag object");
@@ -316,7 +505,7 @@ describe("release source authentication", () => {
           "commit.gpgsign=false",
           "tag",
           "--annotate",
-          "v0.0.2",
+          "v0.1.3",
           "--message",
           "unsigned",
         ],
@@ -325,16 +514,24 @@ describe("release source authentication", () => {
       expect(() =>
         validateReleaseTag({
           root,
-          releaseTag: "v0.0.2",
+          releaseTag: "v0.1.3",
           expectedReleaseCommit: releaseCommit,
         }),
       ).toThrow("not valid for an approved signer");
+
+      expect(() =>
+        validateReleaseTag({
+          root,
+          releaseTag: "v0.1.0",
+          expectedReleaseCommit: releaseCommit,
+        }),
+      ).toThrow("stable release tag");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("keeps broad preparation outside the OIDC-enabled publisher job", () => {
+  it("verifies the release source before preparation and isolates publication", () => {
     const workflow = readFileSync(
       join(process.cwd(), ".github", "workflows", "publish.yml"),
       "utf8",
@@ -354,16 +551,128 @@ describe("release source authentication", () => {
     expect(prepare).not.toContain("id-token: write");
     expect(publish).toContain("environment: npm-publish");
     expect(publish).toContain("id-token: write");
-    expect(publish).not.toContain("npm ci");
-    expect(publish).not.toContain("npm install");
+
+    const prepareVerify = prepare.indexOf("- name: Verify the release source");
+    const prepareCheckout = prepare.indexOf("uses: actions/checkout@");
+    expect(prepareVerify).toBeGreaterThanOrEqual(0);
+    expect(prepareCheckout).toBeGreaterThan(prepareVerify);
+    expect(prepare.slice(0, prepareCheckout)).toContain(
+      "git init --quiet --bare",
+    );
+    expect(prepare.slice(0, prepareCheckout)).toContain(
+      'git -C "${repository}" verify-tag "${tag_ref}"',
+    );
+    expect(prepare.slice(0, prepareCheckout)).toContain(
+      "merge-base --is-ancestor",
+    );
+    expect(prepare.slice(0, prepareCheckout)).toContain(
+      "::error::Release ref must be an annotated tag",
+    );
+    expect(prepare).toContain("ref: ${{ github.sha }}");
+    expect(prepare).toContain("persist-credentials: false");
+    expect(prepare).toContain("pnpm run release:check");
+    expect(prepare).toContain("rm -rf -- packages/sessions/dist");
+    expect(prepare).toContain(
+      "-type f -name '*.tsbuildinfo' -exec rm -f -- {} +",
+    );
+    expect(prepare).toContain("include-hidden-files: false");
+    expect(prepare).toContain("release-upload/package-manifest.json");
+    expect(prepare).toContain(
+      "tarball=release-upload/pegma-sessions-${version}.tgz",
+    );
+    expect(prepare).toContain("steps.inventory.outputs.tarball");
+
+    expect(publish).not.toContain("actions/checkout@");
+    const publishSteps = publish.indexOf("\n    steps:");
+    expect(publishSteps).toBeGreaterThanOrEqual(0);
+    expect(publish.slice(0, publishSteps)).not.toContain("${{ runner.");
     expect(publish).not.toContain("pnpm install");
     expect(publish).not.toContain("release:pack");
-    expect(publish).toContain("node scripts/release-packages.mjs publish");
+    expect(publish).not.toContain("scripts/release-packages.mjs");
     expect(publish).not.toContain("corepack");
     expect(publish).not.toContain("pnpm run");
-    expect(prepare).toContain("npm install --global npm@11.18.0");
+    expect(publish).toContain("git init --quiet --bare");
+    expect(publish).toContain('git -C "${repository}" verify-tag');
+    expect(publish).toContain("merge-base --is-ancestor");
+    expect(publish).toContain(
+      'const expectedNames = ["package-manifest.json", expectedTarball]',
+    );
+    expect(publish).toContain("entry?.isFile() !== true");
+    expect(publish).toContain("record.sha256");
+    expect(publish).toContain("record.integrity");
+    expect(publish).toContain('"dist/index.d.ts"');
+    expect(publish).toContain('"dist/index.js"');
+    expect(publish).toContain("NPM_CONFIG_USERCONFIG");
+    expect(publish).toContain("NPM_CONFIG_GLOBALCONFIG");
+    expect(publish).toContain(
+      "RELEASE_DIRECTORY: ${{ runner.temp }}/sessions-release/.release",
+    );
+    expect(publish).toContain('"--provenance"');
+    expect(publish).toContain('"--ignore-scripts"');
+    expect(publish).toContain('"--registry"');
+    expect(publish).toContain("spawnSync(process.execPath");
+    expect(publish).toContain("for (let attempt = 0; attempt < 6");
+    expect(publish).toContain("did not expose the prepared package integrity");
+    expect(prepare).toContain('npm install --global "${npm_tarball}"');
+    expect(publish).toContain('npm install --global "${npm_tarball}"');
+    expect(
+      workflow.match(/npm-11\.18\.0\.tgz/gu)?.length,
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      workflow.match(
+        /sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW\/WJ\+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0\+vzXysCvAsepbMaBTwnrAD\+w==/gu,
+      ),
+    ).toHaveLength(2);
+    for (const name of [
+      "COMSPEC",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "LOCALAPPDATA",
+      "PATHEXT",
+      "USERPROFILE",
+      "WINDIR",
+    ]) {
+      expect(publish).toContain(`"${name}"`);
+    }
+    expect(workflow.match(/git init --quiet --bare/gu)).toHaveLength(2);
+    const verificationScripts = workflowRunScripts(workflow).filter((script) =>
+      script.includes("release-verify.XXXXXX"),
+    );
+    expect(verificationScripts).toHaveLength(2);
+    expect(verificationScripts[1]).toBe(verificationScripts[0]);
+    const reviewedNpmScripts = workflowRunScripts(workflow).filter((script) =>
+      script.includes("reviewed-npm.XXXXXX"),
+    );
+    expect(reviewedNpmScripts).toHaveLength(2);
+    expect(reviewedNpmScripts[1]).toBe(reviewedNpmScripts[0]);
+    expect(
+      workflow.match(
+        /RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \}\}/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      workflow.match(
+        /RELEASE_PRERELEASE: \$\{\{ github\.event\.release\.prerelease \}\}/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      workflow.match(/RELEASE_COMMIT: \$\{\{ github\.sha \}\}/gu),
+    ).toHaveLength(2);
+    expect(
+      workflow.match(
+        /RELEASE_ALLOWED_SIGNERS: \$\{\{ vars\.RELEASE_ALLOWED_SIGNERS \}\}/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      workflow.match(/\[\[ "\$\{RELEASE_TAG\}" == "v0\.1\.0" \]\]/gu),
+    ).toHaveLength(2);
+    expect(workflowRunScripts('run: >-\n  echo "${{ value }}"')).toEqual([
+      '  echo "${{ value }}"',
+    ]);
+    for (const script of workflowRunScripts(workflow)) {
+      expect(script).not.toContain("${{");
+    }
     expect(workflow).not.toContain("workflow_dispatch");
-    expect(workflow).not.toContain("NODE_AUTH_TOKEN");
     expect(workflow).toContain("retention-days: 30");
   });
 
@@ -379,6 +688,7 @@ describe("release source authentication", () => {
     expect(workflow).toContain(
       "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
     );
+    expect(workflow).toContain("pnpm run release:check");
   });
 });
 
