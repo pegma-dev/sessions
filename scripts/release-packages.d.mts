@@ -1,3 +1,5 @@
+import type { SpawnSyncReturns } from "node:child_process";
+
 export interface ReleasePackageDefinition {
   readonly directory: string;
   readonly name: string;
@@ -132,4 +134,3 @@ export function inspectPreparedRegistry(
 export function publishPreparedRelease(
   options?: ReleaseCommandOptions,
 ): Promise<void>;
-import type { SpawnSyncReturns } from "node:child_process";

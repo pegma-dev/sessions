@@ -50,7 +50,8 @@ The release tool verifies that:
 - the root pins `pnpm@10.34.5` and `pnpm-lock.yaml` matches each
   dependency, including `peerDependencies`, to its own specifier and a
   resolved version that satisfies that specifier;
-- pack and trusted publish still use reviewed `npm@11.18.0`;
+- pack and trusted publish use reviewed `npm@11.18.0`, downloaded from its
+  fixed registry URL and matched to the repository-recorded SHA-512 value;
 - `@pegma/sessions` is public MIT-licensed ESM for Node 22 or newer;
 - runtime dependencies are pinned exactly;
 - repository metadata points to `pegma-dev/sessions`;
@@ -156,7 +157,8 @@ The globally serialized preparation job:
    event commit, and `origin/main` ancestry;
 3. checks out the already verified commit by exact SHA without persisted Git
    credentials;
-4. uses Node 24.18.0, pnpm 10.34.5, and npm 11.18.0 for validation and pack;
+4. uses Node 24.18.0, pnpm 10.34.5, and the SHA-512-matched npm 11.18.0
+   tarball for validation and pack;
 5. runs the full gate without OIDC publication authority;
 6. removes generated build outputs, performs a clean build, smoke-tests the
    package, and records the exact tarball digests; and
@@ -169,7 +171,8 @@ verification, and validates the two-file inventory, manifest schema, commit,
 version, and tarball digests using workflow-owned inline code. It runs the
 reviewed npm CLI from an empty temporary directory with empty private npm
 configuration files and an allowlisted environment, then publishes the
-absolute tarball path with provenance and lifecycle scripts disabled.
+absolute tarball path with provenance and lifecycle scripts disabled. After a
+new publication, it waits for the registry to report the prepared integrity.
 
 If a hardened release fails, rerun its failed jobs against the unchanged tag:
 

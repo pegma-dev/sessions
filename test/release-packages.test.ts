@@ -54,7 +54,7 @@ function workflowRunScripts(workflow: string): string[] {
     const match = /^(\s*)run:\s*(.*)$/u.exec(lines[index] ?? "");
     if (match === null) continue;
     const runValue = match[2] ?? "";
-    if (runValue !== "|") {
+    if (!/^[|>][+-]?$/u.test(runValue)) {
       scripts.push(runValue);
       continue;
     }
@@ -102,6 +102,7 @@ describe("release package metadata", () => {
     expect(source).toContain('"npm", "bin", "npm-cli.js"');
     expect(source).toContain("command: process.execPath");
     expect(source).toContain("shell: false");
+    expect(source).toContain('runNpm(["--prefix", root, "run", "build"]);');
     expect(runNpm(["--version"], { capture: true }).stdout.trim()).toMatch(
       /^\d+\.\d+\.\d+(?:-.+)?$/u,
     );
@@ -364,6 +365,8 @@ importers:
     expect(isSupportedReleaseTag("v0.1.0")).toBe(false);
     expect(isSupportedReleaseTag("v0.0.9")).toBe(false);
     expect(isSupportedReleaseTag("v01.2.3")).toBe(false);
+    expect(isSupportedReleaseTag("v1.01.0")).toBe(false);
+    expect(isSupportedReleaseTag("v0.1.01")).toBe(false);
     expect(isSupportedReleaseTag("v1.2.3-beta.1")).toBe(false);
   });
 
@@ -409,17 +412,20 @@ importers:
     const packageDirectory = join(process.cwd(), "packages", "sessions");
     const dist = join(packageDirectory, "dist");
     const buildInfo = join(packageDirectory, "tsconfig.tsbuildinfo");
+    const rootBuildInfo = join(process.cwd(), "tsconfig.tsbuildinfo");
     const root = mkdtempSync(join(tmpdir(), "sessions-release-pack-"));
     const output = join(root, "release");
     try {
       mkdirSync(dist, { recursive: true });
       writeFileSync(join(dist, "stale.js"), "stale output\n");
       writeFileSync(buildInfo, "stale build information\n");
+      writeFileSync(rootBuildInfo, "stale root build information\n");
       const result = await prepareRelease({ output });
       const prepared = result.manifest as {
         package: { integrity: string; sha256: string; tarball: string };
       };
       expect(() => statSync(join(dist, "stale.js"))).toThrow();
+      expect(() => statSync(rootBuildInfo)).toThrow();
       expect(prepared.package.sha256).toMatch(/^[0-9a-f]{64}$/u);
       expect(prepared.package.integrity).toMatch(
         /^sha512-[A-Za-z0-9+/]{86}==$/u,
@@ -429,6 +435,9 @@ importers:
       ).resolves.toEqual({ tarball: prepared.package.tarball });
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(dist, { recursive: true, force: true });
+      rmSync(buildInfo, { force: true });
+      rmSync(rootBuildInfo, { force: true });
     }
   }, 120_000);
 });
@@ -553,13 +562,14 @@ describe("release source authentication", () => {
     expect(prepare.slice(0, prepareCheckout)).toContain(
       "merge-base --is-ancestor",
     );
+    expect(prepare.slice(0, prepareCheckout)).toContain(
+      "::error::Release ref must be an annotated tag",
+    );
     expect(prepare).toContain("ref: ${{ github.sha }}");
     expect(prepare).toContain("persist-credentials: false");
     expect(prepare).toContain("pnpm run release:check");
     expect(prepare).toContain("rm -rf -- packages/sessions/dist");
-    expect(prepare).toContain(
-      "find packages/sessions -type f -name '*.tsbuildinfo'",
-    );
+    expect(prepare).toContain("-type f -name '*.tsbuildinfo' -delete");
     expect(prepare).toContain("include-hidden-files: false");
     expect(prepare).toContain(".release/package-manifest.json");
     expect(prepare).toContain("steps.inventory.outputs.tarball");
@@ -585,8 +595,29 @@ describe("release source authentication", () => {
     expect(publish).toContain('"--ignore-scripts"');
     expect(publish).toContain('"--registry"');
     expect(publish).toContain("spawnSync(process.execPath");
-    expect(prepare).toContain("npm install --global npm@11.18.0");
-    expect(publish).toContain("npm install --global npm@11.18.0");
+    expect(publish).toContain("for (let attempt = 0; attempt < 6");
+    expect(publish).toContain("did not expose the prepared package integrity");
+    expect(prepare).toContain('npm install --global "${npm_tarball}"');
+    expect(publish).toContain('npm install --global "${npm_tarball}"');
+    expect(
+      workflow.match(/npm-11\.18\.0\.tgz/gu)?.length,
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      workflow.match(
+        /sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW\/WJ\+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0\+vzXysCvAsepbMaBTwnrAD\+w==/gu,
+      ),
+    ).toHaveLength(2);
+    for (const name of [
+      "COMSPEC",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "LOCALAPPDATA",
+      "PATHEXT",
+      "USERPROFILE",
+      "WINDIR",
+    ]) {
+      expect(publish).toContain(`"${name}"`);
+    }
     expect(workflow.match(/git init --quiet --bare/gu)).toHaveLength(2);
     expect(
       workflow.match(
@@ -609,6 +640,9 @@ describe("release source authentication", () => {
     expect(
       workflow.match(/\[\[ "\$\{RELEASE_TAG\}" == "v0\.1\.0" \]\]/gu),
     ).toHaveLength(2);
+    expect(workflowRunScripts('run: >-\n  echo "${{ value }}"')).toEqual([
+      '  echo "${{ value }}"',
+    ]);
     for (const script of workflowRunScripts(workflow)) {
       expect(script).not.toContain("${{");
     }

@@ -23,6 +23,8 @@ jobs:
       RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
       RELEASE_COMMIT: ${{ github.sha }}
       RELEASE_ALLOWED_SIGNERS: ${{ vars.RELEASE_ALLOWED_SIGNERS }}
+      REVIEWED_NPM_TARBALL: https://registry.npmjs.org/npm/-/npm-11.18.0.tgz
+      REVIEWED_NPM_INTEGRITY: sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w==
 
     steps:
       - name: Verify the release source
@@ -33,7 +35,9 @@ jobs:
             echo "::error::Only stable releases are supported"
             exit 1
           fi
-          if [[ ! "${RELEASE_TAG}" =~ ^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$ ]] || [[ "${RELEASE_TAG}" == "v0.1.0" ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$ ]] ||
+            [[ ! "${RELEASE_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+            [[ "${RELEASE_TAG}" == "v0.1.0" ]]; then
             echo "::error::Release tag must be a supported stable version"
             exit 1
           fi
@@ -64,12 +68,27 @@ jobs:
             "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
 
           tag_ref="refs/tags/${RELEASE_TAG}"
-          [[ "$(git -C "${repository}" cat-file -t "${tag_ref}")" == "tag" ]]
-          git -C "${repository}" verify-tag "${tag_ref}"
-          tag_commit="$(git -C "${repository}" rev-parse --verify "${tag_ref}^{commit}")"
-          [[ "${tag_commit}" == "${RELEASE_COMMIT}" ]]
-          git -C "${repository}" merge-base --is-ancestor \
-            "${RELEASE_COMMIT}" refs/remotes/origin/main
+          if [[ "$(git -C "${repository}" cat-file -t "${tag_ref}")" != "tag" ]]; then
+            echo "::error::Release ref must be an annotated tag"
+            exit 1
+          fi
+          if ! git -C "${repository}" verify-tag "${tag_ref}"; then
+            echo "::error::Release tag signature is not approved"
+            exit 1
+          fi
+          if ! tag_commit="$(git -C "${repository}" rev-parse --verify "${tag_ref}^{commit}")"; then
+            echo "::error::Release tag commit could not be resolved"
+            exit 1
+          fi
+          if [[ "${tag_commit}" != "${RELEASE_COMMIT}" ]]; then
+            echo "::error::Release tag does not match the event commit"
+            exit 1
+          fi
+          if ! git -C "${repository}" merge-base --is-ancestor \
+            "${RELEASE_COMMIT}" refs/remotes/origin/main; then
+            echo "::error::Release commit is not contained in origin/main"
+            exit 1
+          fi
 
       - name: Check out the verified release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -99,7 +118,36 @@ jobs:
         run: corepack enable
 
       - name: Use the reviewed npm release
-        run: npm install --global npm@11.18.0 --ignore-scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_directory="$(mktemp -d "${RUNNER_TEMP}/reviewed-npm.XXXXXX")"
+          trap 'rm -rf -- "${npm_directory}"' EXIT
+          npm_tarball="${npm_directory}/npm-11.18.0.tgz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${npm_tarball}" "${REVIEWED_NPM_TARBALL}"
+          node --input-type=module - "${npm_tarball}" <<'NODE'
+          import { createHash, timingSafeEqual } from "node:crypto";
+          import { readFileSync } from "node:fs";
+
+          const actual = `sha512-${createHash("sha512")
+            .update(readFileSync(process.argv[2]))
+            .digest("base64")}`;
+          const expected = process.env.REVIEWED_NPM_INTEGRITY;
+          const actualBytes = Buffer.from(actual);
+          const expectedBytes = Buffer.from(expected);
+          if (
+            actualBytes.length !== expectedBytes.length ||
+            !timingSafeEqual(actualBytes, expectedBytes)
+          ) {
+            throw new Error("reviewed npm integrity does not match");
+          }
+          NODE
+          npm install --global "${npm_tarball}" --ignore-scripts
+          if [[ "$(npm --version)" != "11.18.0" ]]; then
+            echo "::error::Reviewed npm version is not active"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -121,7 +169,8 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf -- packages/sessions/dist
-          find packages/sessions -type f -name '*.tsbuildinfo' -delete
+          find . -path './node_modules' -prune -o \
+            -type f -name '*.tsbuildinfo' -delete
 
       - name: Prepare and verify the release tarball
         run: pnpm run release:pack -- -- --require-clean --require-main-ancestor --require-release-tag --expected-release-commit "${RELEASE_COMMIT}" --output .release
@@ -191,6 +240,8 @@ jobs:
       RELEASE_COMMIT: ${{ github.sha }}
       RELEASE_ALLOWED_SIGNERS: ${{ vars.RELEASE_ALLOWED_SIGNERS }}
       RELEASE_DIRECTORY: ${{ runner.temp }}/sessions-release/.release
+      REVIEWED_NPM_TARBALL: https://registry.npmjs.org/npm/-/npm-11.18.0.tgz
+      REVIEWED_NPM_INTEGRITY: sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w==
 
     steps:
       - name: Verify the release source
@@ -201,7 +252,9 @@ jobs:
             echo "::error::Only stable releases are supported"
             exit 1
           fi
-          if [[ ! "${RELEASE_TAG}" =~ ^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$ ]] || [[ "${RELEASE_TAG}" == "v0.1.0" ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v(0\.[1-9][0-9]*|[1-9][0-9]*\.[0-9]+)\.[0-9]+$ ]] ||
+            [[ ! "${RELEASE_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+            [[ "${RELEASE_TAG}" == "v0.1.0" ]]; then
             echo "::error::Release tag must be a supported stable version"
             exit 1
           fi
@@ -232,12 +285,27 @@ jobs:
             "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
 
           tag_ref="refs/tags/${RELEASE_TAG}"
-          [[ "$(git -C "${repository}" cat-file -t "${tag_ref}")" == "tag" ]]
-          git -C "${repository}" verify-tag "${tag_ref}"
-          tag_commit="$(git -C "${repository}" rev-parse --verify "${tag_ref}^{commit}")"
-          [[ "${tag_commit}" == "${RELEASE_COMMIT}" ]]
-          git -C "${repository}" merge-base --is-ancestor \
-            "${RELEASE_COMMIT}" refs/remotes/origin/main
+          if [[ "$(git -C "${repository}" cat-file -t "${tag_ref}")" != "tag" ]]; then
+            echo "::error::Release ref must be an annotated tag"
+            exit 1
+          fi
+          if ! git -C "${repository}" verify-tag "${tag_ref}"; then
+            echo "::error::Release tag signature is not approved"
+            exit 1
+          fi
+          if ! tag_commit="$(git -C "${repository}" rev-parse --verify "${tag_ref}^{commit}")"; then
+            echo "::error::Release tag commit could not be resolved"
+            exit 1
+          fi
+          if [[ "${tag_commit}" != "${RELEASE_COMMIT}" ]]; then
+            echo "::error::Release tag does not match the event commit"
+            exit 1
+          fi
+          if ! git -C "${repository}" merge-base --is-ancestor \
+            "${RELEASE_COMMIT}" refs/remotes/origin/main; then
+            echo "::error::Release commit is not contained in origin/main"
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -246,7 +314,36 @@ jobs:
           package-manager-cache: false
 
       - name: Use the reviewed npm release
-        run: npm install --global npm@11.18.0 --ignore-scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_directory="$(mktemp -d "${RUNNER_TEMP}/reviewed-npm.XXXXXX")"
+          trap 'rm -rf -- "${npm_directory}"' EXIT
+          npm_tarball="${npm_directory}/npm-11.18.0.tgz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${npm_tarball}" "${REVIEWED_NPM_TARBALL}"
+          node --input-type=module - "${npm_tarball}" <<'NODE'
+          import { createHash, timingSafeEqual } from "node:crypto";
+          import { readFileSync } from "node:fs";
+
+          const actual = `sha512-${createHash("sha512")
+            .update(readFileSync(process.argv[2]))
+            .digest("base64")}`;
+          const expected = process.env.REVIEWED_NPM_INTEGRITY;
+          const actualBytes = Buffer.from(actual);
+          const expectedBytes = Buffer.from(expected);
+          if (
+            actualBytes.length !== expectedBytes.length ||
+            !timingSafeEqual(actualBytes, expectedBytes)
+          ) {
+            throw new Error("reviewed npm integrity does not match");
+          }
+          NODE
+          npm install --global "${npm_tarball}" --ignore-scripts
+          if [[ "$(npm --version)" != "11.18.0" ]]; then
+            echo "::error::Reviewed npm version is not active"
+            exit 1
+          fi
 
       - name: Download the prepared release
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -385,13 +482,21 @@ jobs:
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
             "ACTIONS_ID_TOKEN_REQUEST_URL",
             "CI",
+            "COMSPEC",
             "HOME",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "LOCALAPPDATA",
             "PATH",
+            "Path",
+            "PATHEXT",
             "SystemRoot",
             "SYSTEMROOT",
             "TEMP",
             "TMP",
             "TMPDIR",
+            "USERPROFILE",
+            "WINDIR",
           ]);
           const env = {};
           for (const [name, value] of Object.entries(process.env)) {
@@ -415,6 +520,34 @@ jobs:
             }
             return result;
           };
+          const queryRegistryIntegrity = (spec) => {
+            const lookup = npm([
+              "view",
+              spec,
+              "dist.integrity",
+              "--json",
+              "--registry",
+              REGISTRY,
+            ], true);
+            if (lookup.status === 0) {
+              const value = JSON.parse(lookup.stdout);
+              if (typeof value !== "string" || value.length === 0) {
+                throw new Error("registry version has no package integrity");
+              }
+              return value;
+            }
+            const output = `${lookup.stdout}\n${lookup.stderr}`;
+            if (/\bE404\b/u.test(output)) return null;
+            throw new Error(`npm registry lookup failed:\n${output.trim()}`);
+          };
+          const wait = (milliseconds) => {
+            Atomics.wait(
+              new Int32Array(new SharedArrayBuffer(4)),
+              0,
+              0,
+              milliseconds,
+            );
+          };
 
           try {
             const npmVersion = npm(["--version"]).stdout.trim();
@@ -422,18 +555,13 @@ jobs:
               throw new Error(`unexpected npm version ${npmVersion}`);
             }
             const spec = `${PACKAGE_NAME}@${version}`;
-            const lookup = npm(["view", spec, "dist.integrity", "--json", "--registry", REGISTRY], true);
-            if (lookup.status === 0) {
-              const publishedIntegrity = JSON.parse(lookup.stdout);
+            const publishedIntegrity = queryRegistryIntegrity(spec);
+            if (publishedIntegrity !== null) {
               if (!equal(record.integrity, publishedIntegrity)) {
                 throw new Error("registry version has different package integrity");
               }
               process.stdout.write(`Verified existing ${spec}; skipping.\n`);
             } else {
-              const lookupOutput = `${lookup.stdout}\n${lookup.stderr}`;
-              if (!/\bE404\b/u.test(lookupOutput)) {
-                throw new Error(`npm registry lookup failed:\n${lookupOutput.trim()}`);
-              }
               npm([
                 "publish",
                 tarballPath,
@@ -444,6 +572,23 @@ jobs:
                 "--provenance",
                 "--ignore-scripts",
               ]);
+              let confirmed = false;
+              for (let attempt = 0; attempt < 6; attempt += 1) {
+                const currentIntegrity = queryRegistryIntegrity(spec);
+                if (
+                  currentIntegrity !== null &&
+                  equal(record.integrity, currentIntegrity)
+                ) {
+                  confirmed = true;
+                  break;
+                }
+                if (attempt < 5) wait(2 ** attempt * 1000);
+              }
+              if (!confirmed) {
+                throw new Error(
+                  `${spec} did not expose the prepared package integrity`,
+                );
+              }
             }
           } finally {
             rmSync(runtimeRoot, { recursive: true, force: true });

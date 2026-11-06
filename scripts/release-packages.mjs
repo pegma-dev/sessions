@@ -357,7 +357,11 @@ function hashTarball(bytes) {
 }
 
 export function isSupportedReleaseTag(releaseTag) {
-  return RELEASE_TAG.test(releaseTag) && releaseTag !== "v0.1.0";
+  return (
+    RELEASE_TAG.test(releaseTag) &&
+    STABLE_SEMVER.test(releaseTag.slice(1)) &&
+    releaseTag !== "v0.1.0"
+  );
 }
 
 function exportTargets(value) {
@@ -634,7 +638,19 @@ async function buildFromCleanOutputs(root, packageDirectory) {
   run(process.execPath, [typescript, "-b", "--clean"], { cwd: root });
   await rm(join(packageDirectory, "dist"), { recursive: true, force: true });
   await rm(join(packageDirectory, "tsconfig.tsbuildinfo"), { force: true });
-  run(process.execPath, [typescript, "-b"], { cwd: root });
+  await rm(join(root, "tsconfig.tsbuildinfo"), { force: true });
+  runNpm(["--prefix", root, "run", "build"]);
+}
+
+async function removeOwnedReleaseFile(path) {
+  try {
+    const details = await lstat(path);
+    if (details.isFile() || details.isSymbolicLink()) {
+      await rm(path, { force: true });
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
 }
 
 async function smokeTestTarball(tarball, manifest) {
@@ -737,8 +753,16 @@ export async function prepareRelease(options = {}) {
     },
   };
   const manifestPath = join(output, "package-manifest.json");
-  await writeFile(manifestPath, `${JSON.stringify(prepared, null, 2)}\n`);
-  await validateReleaseInventory(output, basename(tarballPath));
+  try {
+    await writeFile(manifestPath, `${JSON.stringify(prepared, null, 2)}\n`);
+    await validateReleaseInventory(output, basename(tarballPath));
+  } catch (error) {
+    await Promise.allSettled([
+      removeOwnedReleaseFile(manifestPath),
+      removeOwnedReleaseFile(tarballPath),
+    ]);
+    throw error;
+  }
   return { manifestPath, manifest: prepared };
 }
 
