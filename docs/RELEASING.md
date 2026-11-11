@@ -10,7 +10,7 @@ There is no npm-token or manual-dispatch fallback.
 
 ## Historical `v0.1.0` exception
 
-`@pegma/sessions@0.1.0` is published and is the current `latest` version. It
+`@pegma/sessions@0.1.0` was the first published version. It
 is immutable, but it predates the hardened release path:
 
 - the GitHub release used a lightweight tag at
@@ -135,12 +135,12 @@ git switch --detach origin/main
 git config gpg.format ssh
 git config user.signingkey ~/.ssh/pegma-release-signing-key
 git config gpg.ssh.allowedSignersFile ~/.config/pegma/release-allowed-signers
-git tag --sign v0.2.0 --message "Sessions v0.2.0" HEAD
-git verify-tag v0.2.0
-git push origin refs/tags/v0.2.0
-git fetch origin tag v0.2.0 --force
-git verify-tag v0.2.0
-gh release create v0.2.0 --verify-tag --title "@pegma/sessions v0.2.0" --notes-file RELEASE_NOTES.md
+git tag --sign v0.2.1 --message "Sessions v0.2.1" HEAD
+git verify-tag v0.2.1
+git push origin refs/tags/v0.2.1
+git fetch origin tag v0.2.1 --force
+git verify-tag v0.2.1
+gh release create v0.2.1 --verify-tag --title "@pegma/sessions v0.2.1" --notes-file RELEASE_NOTES.md
 ```
 
 Do not let `gh release create` create a tag. Never move or recreate a release

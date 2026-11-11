@@ -129,6 +129,50 @@ function wrapSessionCollection(
   };
 }
 
+function pauseSessionRead(base: Store) {
+  let next: "getVersioned" | "listVersioned" | undefined;
+  let reached!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const resume = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  async function before(method: "getVersioned" | "listVersioned") {
+    if (next !== method) return;
+    next = undefined;
+    reached();
+    await resume;
+  }
+  const store = wrapSessionCollection(base, (collection) => {
+    const getVersioned: typeof collection.getVersioned = async (...args) => {
+      await before("getVersioned");
+      return collection.getVersioned(...args);
+    };
+    const listVersioned: typeof collection.listVersioned = async (...args) => {
+      await before("listVersioned");
+      return collection.listVersioned(...args);
+    };
+    return new Proxy(collection, {
+      get(target, property) {
+        if (property === "getVersioned") return getVersioned;
+        if (property === "listVersioned") return listVersioned;
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  });
+  return {
+    store,
+    entered,
+    release,
+    arm(method: typeof next) {
+      next = method;
+    },
+  };
+}
+
 function recordingLogger() {
   const entries: {
     readonly level: string;
@@ -228,6 +272,106 @@ for (const backend of backends) {
       expect(() =>
         createSessionStore(backend.freshStore(), { idleTimeoutMs: 0 }),
       ).toThrow(/positive finite/);
+    });
+
+    it("observes the default clock after an overlapping read has touched the live session", async () => {
+      const inspected = inspectStorage(backend.freshStore());
+      const paused = pauseSessionRead(inspected.store);
+      let milliseconds = Date.parse(NOW);
+      const clock = { now: () => new Date(milliseconds).toISOString() };
+      const sessions = createSessionStore(paused.store, { clock });
+      await sessions.create("overlapping-default-read", NEW_SESSION);
+
+      paused.arm("getVersioned");
+      const earlier = sessions.get("overlapping-default-read");
+      await paused.entered;
+      milliseconds += 1;
+      try {
+        // This actual SDK read, not a forged storage row, advances lastSeenAt.
+        expect(await sessions.get("overlapping-default-read")).not.toBeNull();
+      } finally {
+        paused.release();
+      }
+
+      expect((await earlier)?.lastSeenAt).toBe(clock.now());
+      expect(await sessions.get("overlapping-default-read")).not.toBeNull();
+      expect(
+        storedSessions(await inspected.records().list("session")),
+      ).toHaveLength(1);
+    });
+
+    it("observes the default sweep clock after an overlapping read has touched the live session", async () => {
+      const inspected = inspectStorage(backend.freshStore());
+      const paused = pauseSessionRead(inspected.store);
+      let milliseconds = Date.parse(NOW);
+      const clock = { now: () => new Date(milliseconds).toISOString() };
+      const sessions = createSessionStore(paused.store, { clock });
+      await sessions.create("overlapping-default-sweep", NEW_SESSION);
+
+      paused.arm("listVersioned");
+      const sweeping = sessions.purgeExpired();
+      await paused.entered;
+      milliseconds += 1;
+      try {
+        expect(await sessions.get("overlapping-default-sweep")).not.toBeNull();
+      } finally {
+        paused.release();
+      }
+
+      expect(await sweeping).toBe(0);
+      expect(await sessions.get("overlapping-default-sweep")).not.toBeNull();
+      expect(
+        storedSessions(await inspected.records().list("session")),
+      ).toHaveLength(1);
+    });
+
+    it("observes expiry at the default clock after the awaited session read", async () => {
+      const inspected = inspectStorage(backend.freshStore());
+      const paused = pauseSessionRead(inspected.store);
+      let milliseconds = Date.parse(NOW);
+      const clock = { now: () => new Date(milliseconds).toISOString() };
+      const sessions = createSessionStore(paused.store, {
+        clock,
+        absoluteLifetimeMs: 1_000,
+      });
+      await sessions.create("delayed-default-expiry", NEW_SESSION);
+
+      paused.arm("getVersioned");
+      const reading = sessions.get("delayed-default-expiry");
+      await paused.entered;
+      milliseconds += 1_000;
+      paused.release();
+
+      expect(await reading).toBeNull();
+      expect(
+        storedSessions(await inspected.records().list("session")),
+      ).toHaveLength(0);
+    });
+
+    it("preserves explicit read and sweep instants after awaited storage", async () => {
+      const inspected = inspectStorage(backend.freshStore());
+      const paused = pauseSessionRead(inspected.store);
+      let milliseconds = Date.parse(NOW);
+      const clock = { now: () => new Date(milliseconds).toISOString() };
+      const sessions = createSessionStore(paused.store, {
+        clock,
+        absoluteLifetimeMs: 1_000,
+      });
+      await sessions.create("explicit-read-instant", NEW_SESSION);
+      const explicitNow = "2026-07-27T12:00:00.500Z";
+
+      paused.arm("getVersioned");
+      const reading = sessions.get("explicit-read-instant", explicitNow);
+      await paused.entered;
+      milliseconds += 1_000;
+      paused.release();
+
+      expect(await reading).not.toBeNull();
+      expect(await sessions.purgeExpired(explicitNow)).toBe(0);
+      expect(
+        storedSessions(await inspected.records().list("session")),
+      ).toHaveLength(1);
+      expect(await sessions.get("explicit-read-instant")).toBeNull();
     });
 
     it("returns the initially validated record without claiming its touch", async () => {
@@ -336,6 +480,20 @@ for (const backend of backends) {
 
       await sessions.create("invalid-purge-now", NEW_SESSION);
       expect(await sessions.purgeExpired("still-not-a-time")).toBe(1);
+
+      // JavaScript callers can supply malformed values despite the TS type.
+      // Only undefined selects the default clock; null must still fail closed.
+      await sessions.create("invalid-null-read", NEW_SESSION);
+      expect(
+        await Reflect.apply(sessions.get, sessions, [
+          "invalid-null-read",
+          null,
+        ]),
+      ).toBeNull();
+      await sessions.create("invalid-null-purge", NEW_SESSION);
+      expect(await Reflect.apply(sessions.purgeExpired, sessions, [null])).toBe(
+        1,
+      );
     });
 
     it("fails closed on a future idle anchor", async () => {

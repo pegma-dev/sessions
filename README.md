@@ -14,8 +14,12 @@ handling, no CSRF defense. Your host owns its login flow and its HTTP
 surface; this store remembers the result.
 
 > [!IMPORTANT]
-> `@pegma/sessions` is published as `0.1.0`. It remains early `0.x`: the
+> `@pegma/sessions` is published as `0.2.0`. It remains early `0.x`: the
 > public API is not stable, and it is not ready for production use.
+
+The unpublished `0.2.1` patch candidate fixes default clock observations around
+awaited reads and sweeps so concurrent touches do not delete live sessions.
+Explicit timestamps keep their existing semantics.
 
 Current status: the record-store package is published on npm, the first
 consumer migration is merged in

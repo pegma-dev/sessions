@@ -1,3 +1,19 @@
+# @pegma/sessions v0.2.1 candidate
+
+Unpublished patch candidate for concurrent session reads and expiry sweeps.
+Default read time is now observed after hashing and the initial storage read;
+default sweep time is observed after the versioned list snapshot. A concurrent
+successful read can advance the idle anchor without causing an older operation
+to mistake that live session for an invalid future record and delete it. A
+session that expires during the awaited initial read is rejected.
+
+Explicit caller-supplied instants retain their existing semantics. The single
+liveness predicate, malformed/future-timestamp refusal, conditional hygiene
+deletion, unconditional revocation and best-effort non-resurrecting touch remain
+in place. No extra storage read, schema, runtime dependency or public method is
+introduced. Real Memory and Azurite regressions cover the overlapping reads,
+overlapping sweep, expiry handoff and explicit-time compatibility.
+
 # @pegma/sessions v0.2.0
 
 A dependency-alignment release: `@pegma/storage-core` advances from `0.3.0` to
