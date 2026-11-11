@@ -339,13 +339,71 @@ for (const backend of backends) {
       paused.arm("getVersioned");
       const reading = sessions.get("delayed-default-expiry");
       await paused.entered;
-      milliseconds += 1_000;
-      paused.release();
+      try {
+        milliseconds += 1_000;
+      } finally {
+        paused.release();
+      }
 
       expect(await reading).toBeNull();
       expect(
         storedSessions(await inspected.records().list("session")),
       ).toHaveLength(0);
+    });
+
+    it("observes expiry at the default clock after the awaited sweep list", async () => {
+      const inspected = inspectStorage(backend.freshStore());
+      const paused = pauseSessionRead(inspected.store);
+      let milliseconds = Date.parse(NOW);
+      const clock = { now: () => new Date(milliseconds).toISOString() };
+      const sessions = createSessionStore(paused.store, {
+        clock,
+        absoluteLifetimeMs: 1_000,
+      });
+      await sessions.create("delayed-sweep-expiry", NEW_SESSION);
+
+      paused.arm("listVersioned");
+      const sweeping = sessions.purgeExpired();
+      await paused.entered;
+      try {
+        milliseconds += 1_000;
+      } finally {
+        paused.release();
+      }
+
+      expect(await sweeping).toBe(1);
+      expect(
+        storedSessions(await inspected.records().list("session")),
+      ).toHaveLength(0);
+    });
+
+    it("observes one default clock after a missing read and an empty sweep", async () => {
+      const paused = pauseSessionRead(backend.freshStore());
+      let observations = 0;
+      const sessions = createSessionStore(paused.store, {
+        clock: {
+          now() {
+            ++observations;
+            return NOW;
+          },
+        },
+      });
+      paused.arm("getVersioned");
+      const missing = sessions.get("unknown-session");
+      await paused.entered;
+      try {
+        expect(observations).toBe(0);
+      } finally {
+        paused.release();
+      }
+
+      expect(await missing).toBeNull();
+      expect(observations).toBe(1);
+      expect(await sessions.purgeExpired()).toBe(0);
+      expect(observations).toBe(2);
+      expect(await sessions.get("unknown-session", NOW)).toBeNull();
+      expect(await sessions.purgeExpired(NOW)).toBe(0);
+      expect(observations).toBe(2);
     });
 
     it("preserves explicit read and sweep instants after awaited storage", async () => {
@@ -363,8 +421,11 @@ for (const backend of backends) {
       paused.arm("getVersioned");
       const reading = sessions.get("explicit-read-instant", explicitNow);
       await paused.entered;
-      milliseconds += 1_000;
-      paused.release();
+      try {
+        milliseconds += 1_000;
+      } finally {
+        paused.release();
+      }
 
       expect(await reading).not.toBeNull();
       expect(await sessions.purgeExpired(explicitNow)).toBe(0);

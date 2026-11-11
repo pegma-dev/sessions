@@ -1,18 +1,21 @@
-# @pegma/sessions v0.2.1 candidate
+# @pegma/sessions v0.2.1
 
-Unpublished patch candidate for concurrent session reads and expiry sweeps.
-Default read time is now observed after hashing and the initial storage read;
-default sweep time is observed after the versioned list snapshot. A concurrent
-successful read can advance the idle anchor without causing an older operation
-to mistake that live session for an invalid future record and delete it. A
-session that expires during the awaited initial read is rejected.
+Fix default clock observation around awaited session reads and expiry sweeps.
+Default read time is observed after hashing and the initial storage read;
+default sweep time is observed after the versioned list snapshot. With a
+consistent advancing clock, a concurrent touch in that snapshot is no longer
+misclassified as a future idle anchor merely because the operation began
+before the touch. Sessions that expire during these awaits are rejected or
+purged using the later observation.
 
-Explicit caller-supplied instants retain their existing semantics. The single
-liveness predicate, malformed/future-timestamp refusal, conditional hygiene
-deletion, unconditional revocation and best-effort non-resurrecting touch remain
-in place. No extra storage read, schema, runtime dependency or public method is
-introduced. Real Memory and Azurite regressions cover the overlapping reads,
-overlapping sweep, expiry handoff and explicit-time compatibility.
+Explicit caller-supplied instants retain their existing semantics. Clock
+rollback or skew between hosts can still produce a future idle anchor, which
+fails closed and may be conditionally deleted. There is no skew tolerance or
+clock-coordination API. The single liveness predicate, malformed timestamp
+refusal, conditional hygiene deletion, unconditional revocation and best-effort
+non-resurrecting touch remain in place. No storage call, schema, runtime
+dependency or public method is added. Memory and Azurite regressions cover the
+concurrent touches, awaited expiry, clock observation and explicit-time behavior.
 
 # @pegma/sessions v0.2.0
 

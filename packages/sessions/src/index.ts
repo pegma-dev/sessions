@@ -541,14 +541,14 @@ export function createSessionStore(
     async get(sessionId, now) {
       const key = sessionKey(await hashSessionId(sessionId));
       const versioned = await sessions.getVersioned(key);
+      // A concurrent read can touch lastSeenAt during hashing or storage I/O.
+      // Observe the default clock after that snapshot, keeping explicit times.
+      const observedNow = now === undefined ? clock.now() : now;
       if (versioned === null || !isSessionRecord(versioned.value)) {
         return null;
       }
 
       const initiallyRead = versioned.value;
-      // A concurrent read can touch lastSeenAt during hashing or storage I/O.
-      // Observe the default clock after that snapshot, keeping explicit times.
-      const observedNow = now === undefined ? clock.now() : now;
       if (!isLive(initiallyRead, observedNow, idleTimeoutMs)) {
         await sessions
           .deleteIfUnchanged(key, versioned.version)

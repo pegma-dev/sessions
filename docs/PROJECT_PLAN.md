@@ -2,10 +2,13 @@
 
 ## Status
 
-**Stage:** Phases 1–4 are complete. `@pegma/sessions@0.1.1` is published;
-RetireGolden is the first integrated consumer and pegma.dev is the second,
-live consumer. `0.2.0` is prepared, aligning `@pegma/storage-core` at `0.4.0`
-across the stack. The public API remains unstable.
+**Stage:** Phases 1–4 are complete. The published `0.2.0` release aligned
+`@pegma/storage-core` at `0.4.0`. RetireGolden is the first integrated consumer
+and pegma.dev is the second, live consumer. The `0.2.1` patch moves default
+clock observations after awaited reads and sweep snapshots. Publication is
+recorded in [GitHub releases](https://github.com/pegma-dev/sessions/releases)
+and [npm](https://www.npmjs.com/package/@pegma/sessions); source metadata alone
+does not publish a version. The public API remains unstable.
 
 Phase 1 is merged on `main`
 ([PR #1](https://github.com/pegma-dev/sessions/pull/1), `f5ea435`,
