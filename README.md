@@ -14,8 +14,20 @@ handling, no CSRF defense. Your host owns its login flow and its HTTP
 surface; this store remembers the result.
 
 > [!IMPORTANT]
-> `@pegma/sessions` is published as `0.1.0`. It remains early `0.x`: the
-> public API is not stable, and it is not ready for production use.
+> `@pegma/sessions` remains early `0.x`: the public API is not stable, and
+> it is not ready for production use. Published versions are listed on
+> [npm](https://www.npmjs.com/package/@pegma/sessions).
+
+The `0.2.1` change observes the default clock after awaited reads and sweeps.
+With a consistent advancing clock, a concurrent touch observed in that snapshot
+is no longer mistaken for a future timestamp merely because the operation
+started earlier. Explicit caller-supplied timestamps keep their semantics.
+
+Clock rollback and skew between hosts remain fail-closed: an idle anchor ahead
+of the observing clock is dead under the single liveness predicate and may be
+conditionally deleted. This change adds no clock-skew tolerance or coordination.
+Source versions describe behavior; publication is recorded in
+[GitHub releases](https://github.com/pegma-dev/sessions/releases).
 
 Current status: the record-store package is published on npm, the first
 consumer migration is merged in

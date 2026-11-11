@@ -60,7 +60,8 @@ export interface SessionStore {
    * Returns the initially validated record when live, otherwise null.
    *
    * The idle touch is best-effort. The returned record deliberately does not
-   * claim that touch succeeded.
+   * claim that touch succeeded. An omitted `now` is observed after the initial
+   * storage read; an explicit instant is used unchanged.
    */
   get(sessionId: string, now?: IsoTimestamp): Promise<SessionRecord | null>;
 
@@ -70,7 +71,7 @@ export interface SessionStore {
   /** Revokes every session owned by `principalId`. */
   destroyAllForPrincipal(principalId: PrincipalId): Promise<number>;
 
-  /** Conditionally removes records that are dead at `now`. */
+  /** Conditionally removes records dead at `now`, defaulting to after the list. */
   purgeExpired(now?: IsoTimestamp): Promise<number>;
 }
 
@@ -537,15 +538,18 @@ export function createSessionStore(
       throwRevocationTransactionLimit();
     },
 
-    async get(sessionId, now = clock.now()) {
+    async get(sessionId, now) {
       const key = sessionKey(await hashSessionId(sessionId));
       const versioned = await sessions.getVersioned(key);
+      // A concurrent read can touch lastSeenAt during hashing or storage I/O.
+      // Observe the default clock after that snapshot, keeping explicit times.
+      const observedNow = now === undefined ? clock.now() : now;
       if (versioned === null || !isSessionRecord(versioned.value)) {
         return null;
       }
 
       const initiallyRead = versioned.value;
-      if (!isLive(initiallyRead, now, idleTimeoutMs)) {
+      if (!isLive(initiallyRead, observedNow, idleTimeoutMs)) {
         await sessions
           .deleteIfUnchanged(key, versioned.version)
           .catch(() => undefined);
@@ -557,12 +561,12 @@ export function createSessionStore(
           if (
             current === null ||
             !isSessionRecord(current) ||
-            !isLive(current, now, idleTimeoutMs)
+            !isLive(current, observedNow, idleTimeoutMs)
           ) {
             return { action: "keep" };
           }
           const currentLastSeen = timestamp(current.lastSeenAt);
-          const at = timestamp(now);
+          const at = timestamp(observedNow);
           if (at <= currentLastSeen) {
             return { action: "keep" };
           }
@@ -704,13 +708,16 @@ export function createSessionStore(
       return destroyed;
     },
 
-    async purgeExpired(now = clock.now()) {
+    async purgeExpired(now) {
       let purged = 0;
-      for (const versioned of await sessions.listVersioned(SESSION_PARTITION)) {
+      const snapshot = await sessions.listVersioned(SESSION_PARTITION);
+      // The list can include a touch newer than the sweep invocation itself.
+      const observedNow = now === undefined ? clock.now() : now;
+      for (const versioned of snapshot) {
         if (!isSessionRecord(versioned.value)) {
           continue;
         }
-        if (isLive(versioned.value, now, idleTimeoutMs)) {
+        if (isLive(versioned.value, observedNow, idleTimeoutMs)) {
           continue;
         }
         if (
