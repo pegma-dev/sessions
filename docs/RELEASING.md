@@ -130,7 +130,7 @@ pnpm run release:pack -- -- --output .release
 ```
 
 After merge, create and verify the tag before creating the GitHub release.
-For example, for the next patch release. The final command sends only the
+For example, for the next release. The final command sends only the
 current version's section to GitHub; older sections stay in the changelog:
 
 ```sh
@@ -139,13 +139,13 @@ git switch --detach origin/main
 git config gpg.format ssh
 git config user.signingkey ~/.ssh/pegma-release-signing-key
 git config gpg.ssh.allowedSignersFile ~/.config/pegma/release-allowed-signers
-git tag --sign v0.2.1 --message "Sessions v0.2.1" HEAD
-git verify-tag v0.2.1
-git push origin refs/tags/v0.2.1
-git fetch origin tag v0.2.1 --force
-git verify-tag v0.2.1
+git tag --sign v0.3.0 --message "Sessions v0.3.0" HEAD
+git verify-tag v0.3.0
+git push origin refs/tags/v0.3.0
+git fetch origin tag v0.3.0 --force
+git verify-tag v0.3.0
 node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(readFileSync("RELEASE_NOTES.md", "utf8").split("\n# @pegma/sessions ")[0]);' |
-  gh release create v0.2.1 --verify-tag --title "@pegma/sessions v0.2.1" --notes-file -
+  gh release create v0.3.0 --verify-tag --title "@pegma/sessions v0.3.0" --notes-file -
 ```
 
 Do not let `gh release create` create a tag. Never move or recreate a release

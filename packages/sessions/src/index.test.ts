@@ -28,11 +28,23 @@ const CONNECTION_STRING = [
 
 let tableCounter = 0;
 
-function freshAzureStore(): Store {
+function freshAzureStore(requests?: string[]): Store {
   tableCounter += 1;
   const table = `sessions${tableCounter}t${process.pid}`;
   const client = TableClient.fromConnectionString(CONNECTION_STRING, table, {
     allowInsecureConnection: true,
+    additionalPolicies: [
+      {
+        position: "perRetry",
+        policy: {
+          name: "record-session-test-requests",
+          sendRequest(request, next) {
+            requests?.push(`${request.method} ${request.url}`);
+            return next(request);
+          },
+        },
+      },
+    ],
   });
   return createAzureTablesStore({ client });
 }
@@ -129,7 +141,7 @@ function wrapSessionCollection(
   };
 }
 
-function pauseSessionRead(base: Store) {
+function pauseSessionRead(base: Store, phase: "before" | "after" = "before") {
   let next: "getVersioned" | "listVersioned" | undefined;
   let reached!: () => void;
   let release!: () => void;
@@ -147,8 +159,10 @@ function pauseSessionRead(base: Store) {
   }
   const store = wrapSessionCollection(base, (collection) => {
     const getVersioned: typeof collection.getVersioned = async (...args) => {
-      await before("getVersioned");
-      return collection.getVersioned(...args);
+      if (phase === "before") await before("getVersioned");
+      const result = await collection.getVersioned(...args);
+      if (phase === "after") await before("getVersioned");
+      return result;
     };
     const listVersioned: typeof collection.listVersioned = async (...args) => {
       await before("listVersioned");
@@ -447,6 +461,344 @@ for (const backend of backends) {
 
       expect(first?.lastSeenAt).toBe(NOW);
       expect(second?.lastSeenAt).toBe(touchedAt);
+    });
+
+    describe("read-only observation", () => {
+      it("uses one fresh hashed-key read without any mutation for live, dead, or missing sessions", async () => {
+        const inspected = inspectStorage(backend.freshStore());
+        let readOnly = false;
+        const calls: unknown[] = [];
+        const wrapped = wrapSessionCollection(
+          inspected.store,
+          (collection) =>
+            new Proxy(collection, {
+              get(target, property) {
+                const value: unknown = Reflect.get(target, property, target);
+                if (typeof value !== "function") return value;
+                if (!readOnly) return value.bind(target);
+                if (property !== "getVersioned") {
+                  throw new Error(
+                    `Unexpected observation operation: ${String(property)}`,
+                  );
+                }
+                return (...args: unknown[]) => {
+                  calls.push(args);
+                  return Reflect.apply(value, target, args);
+                };
+              },
+            }),
+        );
+        const { logger, entries } = recordingLogger();
+        const sessions = createSessionStore(wrapped, {
+          clock: fixedClock(NOW),
+          logger,
+          idleTimeoutMs: 1_000,
+        });
+        const rawId = "observe-raw-session-secret";
+        const created = await sessions.create(rawId, NEW_SESSION);
+        const key = {
+          partition: "session",
+          id: `session:${await sha256(rawId)}`,
+        };
+        const before = await inspected.records().getVersioned(key);
+
+        readOnly = true;
+        expect(await sessions.observe(rawId, NOW)).toEqual(created);
+        expect(
+          await sessions.observe(rawId, "2026-07-27T12:00:01.000Z"),
+        ).toBeNull();
+        expect(await sessions.observe("observe-missing", NOW)).toBeNull();
+        await expect(sessions.observe("")).rejects.toThrow(
+          "Session id must be a non-empty string.",
+        );
+        readOnly = false;
+
+        expect(calls).toEqual([
+          [key],
+          [key],
+          [
+            {
+              partition: "session",
+              id: `session:${await sha256("observe-missing")}`,
+            },
+          ],
+        ]);
+        expect(await inspected.records().getVersioned(key)).toEqual(before);
+        expect(JSON.stringify(calls)).not.toContain(rawId);
+        expect(entries).toEqual([]);
+      });
+
+      it("does not prolong idle expiry while get still advances the anchor", async () => {
+        const sessions = createSessionStore(backend.freshStore(), {
+          clock: fixedClock(NOW),
+          idleTimeoutMs: 500,
+          absoluteLifetimeMs: 2_000,
+        });
+        await sessions.create("observe-idle", NEW_SESSION);
+        await sessions.create("get-idle", NEW_SESSION);
+        const later = "2026-07-27T12:00:00.499Z";
+
+        expect(
+          (await sessions.observe("observe-idle", later))?.lastSeenAt,
+        ).toBe(NOW);
+        expect(await sessions.get("get-idle", later)).not.toBeNull();
+        expect(
+          await sessions.observe("observe-idle", "2026-07-27T12:00:00.500Z"),
+        ).toBeNull();
+        expect(
+          (await sessions.observe("get-idle", "2026-07-27T12:00:00.998Z"))
+            ?.lastSeenAt,
+        ).toBe(later);
+        expect(
+          await sessions.observe("get-idle", "2026-07-27T12:00:00.999Z"),
+        ).toBeNull();
+      });
+
+      it("rejects the absolute boundary even after activity advances idle expiry", async () => {
+        const sessions = createSessionStore(backend.freshStore(), {
+          clock: fixedClock(NOW),
+          absoluteLifetimeMs: 1_000,
+          idleTimeoutMs: 2_000,
+        });
+        await sessions.create("observe-absolute", NEW_SESSION);
+        await sessions.get("observe-absolute", "2026-07-27T12:00:00.999Z");
+        expect(
+          await sessions.observe(
+            "observe-absolute",
+            "2026-07-27T12:00:00.999Z",
+          ),
+        ).not.toBeNull();
+        expect(
+          await sessions.observe(
+            "observe-absolute",
+            "2026-07-27T12:00:01.000Z",
+          ),
+        ).toBeNull();
+      });
+
+      it("observes the default clock after a concurrent get touches the session", async () => {
+        const paused = pauseSessionRead(backend.freshStore());
+        let milliseconds = Date.parse(NOW);
+        const clock = { now: () => new Date(milliseconds).toISOString() };
+        const sessions = createSessionStore(paused.store, { clock });
+        await sessions.create("observe-touch-race", NEW_SESSION);
+        paused.arm("getVersioned");
+        const observing = sessions.observe("observe-touch-race");
+        await paused.entered;
+        try {
+          milliseconds += 1;
+          expect(await sessions.get("observe-touch-race")).not.toBeNull();
+        } finally {
+          paused.release();
+        }
+        expect((await observing)?.lastSeenAt).toBe(clock.now());
+      });
+
+      it.each(["absolute", "idle"] as const)(
+        "checks %s expiry after the awaited snapshot without deleting it",
+        async (boundary) => {
+          const inspected = inspectStorage(backend.freshStore());
+          const paused = pauseSessionRead(inspected.store, "after");
+          let milliseconds = Date.parse(NOW);
+          const sessions = createSessionStore(paused.store, {
+            clock: { now: () => new Date(milliseconds).toISOString() },
+            absoluteLifetimeMs: boundary === "absolute" ? 1_000 : 2_000,
+            idleTimeoutMs: boundary === "idle" ? 1_000 : 2_000,
+          });
+          await sessions.create("observe-awaited-expiry", NEW_SESSION);
+          paused.arm("getVersioned");
+          const observing = sessions.observe("observe-awaited-expiry");
+          await paused.entered;
+          try {
+            milliseconds += 1_000;
+          } finally {
+            paused.release();
+          }
+          expect(await observing).toBeNull();
+          expect(
+            storedSessions(await inspected.records().list("session")),
+          ).toHaveLength(1);
+        },
+      );
+
+      it("preserves explicit instants and never consults the clock for them", async () => {
+        const paused = pauseSessionRead(backend.freshStore(), "after");
+        let observations = 0;
+        let milliseconds = Date.parse(NOW);
+        const sessions = createSessionStore(paused.store, {
+          clock: {
+            now() {
+              observations += 1;
+              return new Date(milliseconds).toISOString();
+            },
+          },
+          absoluteLifetimeMs: 1_000,
+        });
+        await sessions.create("observe-explicit", NEW_SESSION);
+        observations = 0;
+        paused.arm("getVersioned");
+        const observing = sessions.observe(
+          "observe-explicit",
+          "2026-07-27T12:00:00.999Z",
+        );
+        await paused.entered;
+        try {
+          milliseconds += 1_000;
+          expect(observations).toBe(0);
+        } finally {
+          paused.release();
+        }
+        expect(await observing).not.toBeNull();
+        expect(
+          await sessions.observe(
+            "observe-explicit",
+            "2026-07-27T12:00:01.000Z",
+          ),
+        ).toBeNull();
+        expect(observations).toBe(0);
+      });
+
+      it("consults the default clock once after a missing read", async () => {
+        const paused = pauseSessionRead(backend.freshStore());
+        let observations = 0;
+        const sessions = createSessionStore(paused.store, {
+          clock: {
+            now() {
+              observations += 1;
+              return NOW;
+            },
+          },
+        });
+        paused.arm("getVersioned");
+        const observing = sessions.observe("observe-unknown");
+        await paused.entered;
+        try {
+          expect(observations).toBe(0);
+        } finally {
+          paused.release();
+        }
+        expect(await observing).toBeNull();
+        expect(observations).toBe(1);
+        expect(await sessions.observe("observe-unknown", NOW)).toBeNull();
+        expect(observations).toBe(1);
+      });
+
+      it.each([
+        ["createdAt", "not-a-time"],
+        ["expiresAt", "Infinity"],
+        ["lastSeenAt", "NaN"],
+        ["expiresAt", "2026-07-32T12:00:00.000Z"],
+        ["createdAt", "2026-07-27T12:00:00.001Z"],
+        ["lastSeenAt", "2026-07-27T12:00:00.001Z"],
+      ] as const)(
+        "fails closed without deleting malformed %s %s",
+        async (field, value) => {
+          const inspected = inspectStorage(backend.freshStore());
+          const sessions = createSessionStore(inspected.store, {
+            clock: fixedClock(NOW),
+          });
+          await sessions.create("observe-malformed", NEW_SESSION);
+          const records = inspected.records();
+          const [record] = storedSessions(await records.list("session"));
+          await records.put({
+            ...(record as StoredSessionFixture),
+            [field]: value,
+          });
+          expect(await sessions.observe("observe-malformed", NOW)).toBeNull();
+          expect(storedSessions(await records.list("session"))).toHaveLength(1);
+        },
+      );
+
+      it("fails closed for invalid explicit times and an invalid default clock", async () => {
+        const base = backend.freshStore();
+        const sessions = createSessionStore(base, { clock: fixedClock(NOW) });
+        await sessions.create("observe-invalid-now", NEW_SESSION);
+        for (const now of [null, "not-a-time", "2026-07-27T11:59:59.999Z"]) {
+          expect(
+            await Reflect.apply(sessions.observe, sessions, [
+              "observe-invalid-now",
+              now,
+            ]),
+          ).toBeNull();
+        }
+        const badClock = createSessionStore(base, {
+          clock: { now: () => "NaN" },
+        });
+        expect(await badClock.observe("observe-invalid-now")).toBeNull();
+        expect(
+          await sessions.observe("observe-invalid-now", NOW),
+        ).not.toBeNull();
+      });
+
+      it.each(["individual", "principal"] as const)(
+        "freshly refuses %s revocation during an awaited read",
+        async (mode) => {
+          const paused = pauseSessionRead(backend.freshStore());
+          const sessions = createSessionStore(paused.store, {
+            clock: fixedClock(NOW),
+          });
+          await sessions.create("observe-revoke-race", NEW_SESSION);
+          expect(await sessions.observe("observe-revoke-race")).not.toBeNull();
+          paused.arm("getVersioned");
+          const observing = sessions.observe("observe-revoke-race");
+          await paused.entered;
+          try {
+            if (mode === "individual")
+              await sessions.destroy("observe-revoke-race");
+            else
+              expect(await sessions.destroyAllForPrincipal(PRINCIPAL)).toBe(1);
+          } finally {
+            paused.release();
+          }
+          expect(await observing).toBeNull();
+          expect(await sessions.observe("observe-revoke-race")).toBeNull();
+        },
+      );
+
+      it("does not claim to lock a snapshot against later revocation or resurrect it", async () => {
+        const paused = pauseSessionRead(backend.freshStore(), "after");
+        const sessions = createSessionStore(paused.store, {
+          clock: fixedClock(NOW),
+        });
+        const created = await sessions.create(
+          "observe-snapshot-race",
+          NEW_SESSION,
+        );
+        paused.arm("getVersioned");
+        const observing = sessions.observe("observe-snapshot-race");
+        await paused.entered;
+        try {
+          await sessions.destroy("observe-snapshot-race");
+        } finally {
+          paused.release();
+        }
+        expect(await observing).toEqual(created);
+        expect(await sessions.observe("observe-snapshot-race")).toBeNull();
+      });
+
+      it("propagates a fresh backend read failure instead of returning an earlier live result", async () => {
+        let unavailable = false;
+        const failure = new Error("observation backend unavailable");
+        const wrapped = wrapSessionCollection(
+          backend.freshStore(),
+          (collection) => ({
+            ...collection,
+            async getVersioned(key) {
+              if (unavailable) throw failure;
+              return collection.getVersioned(key);
+            },
+          }),
+        );
+        const sessions = createSessionStore(wrapped, {
+          clock: fixedClock(NOW),
+        });
+        await sessions.create("observe-read-error", NEW_SESSION);
+        expect(await sessions.observe("observe-read-error")).not.toBeNull();
+        unavailable = true;
+        await expect(sessions.observe("observe-read-error")).rejects.toBe(
+          failure,
+        );
+      });
     });
 
     it("refuses a collision and preserves the first record", async () => {
@@ -834,6 +1186,7 @@ for (const backend of backends) {
         collision = error;
       }
       await sessions.get(rawId, NOW);
+      await sessions.observe(rawId, NOW);
       await sessions.destroy(rawId);
       await sessions.destroyAllForPrincipal(PRINCIPAL);
       await sessions.purgeExpired(NOW);
@@ -1191,3 +1544,25 @@ for (const backend of backends) {
     });
   });
 }
+
+it("sends one physical Azure GET and no write for each observation after table initialization", async () => {
+  const requests: string[] = [];
+  const sessions = createSessionStore(freshAzureStore(requests), {
+    clock: fixedClock(NOW),
+    idleTimeoutMs: 1_000,
+  });
+  const rawId = "physical-observation-secret";
+  await sessions.create(rawId, NEW_SESSION);
+  for (const [sessionId, now, live] of [
+    [rawId, NOW, true],
+    [rawId, "2026-07-27T12:00:01.000Z", false],
+    ["physical-missing", NOW, false],
+  ] as const) {
+    requests.length = 0;
+    expect((await sessions.observe(sessionId, now)) !== null).toBe(live);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatch(/^GET /u);
+    expect(requests[0]).toContain(await sha256(sessionId));
+    expect(requests[0]).not.toContain(sessionId);
+  }
+});

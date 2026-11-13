@@ -1,6 +1,6 @@
 {
   "name": "@pegma/sessions",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Hashed server-side session records with absolute and idle expiry.",
   "license": "MIT",
   "type": "module",

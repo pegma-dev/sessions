@@ -33,6 +33,46 @@ thousands, not millions, of live sessions.
 Session data must never contain IdP access tokens, refresh tokens, or any other
 credential re-presentable to another service.
 
+## Activity reads and read-only checks
+
+Use `get(rawSessionId)` when the request should count as activity. It reads a
+live session and attempts a best-effort idle touch; a dead row is lazily
+deleted best-effort. The returned record describes the initial validated
+snapshot and does not claim that the touch succeeded.
+
+Use `observe(rawSessionId)` when a later check needs current session identity
+and liveness without extending activity:
+
+```ts
+const admitted = await sessions.get(rawSessionId);
+if (admitted === null) return refuseRequest();
+
+// Before a later protected step, read current session state again.
+const current = await sessions.observe(rawSessionId);
+if (current === null) return refuseRequest();
+// The host must also revalidate current identity and permissions.
+```
+
+`observe` hashes the id and performs one fresh keyed backend read per call. It
+returns a `SessionRecord` when live or null when missing, revoked, or rejected
+by the timestamp and expiry checks shared with `get` and the sweep. These
+checks validate lifecycle timestamps, not principal claims or host data.
+It does not touch the idle anchor, delete dead rows, or cache earlier results.
+Backend read failures reject so the host can fail closed. Keep `get` for the
+activity that should renew idle expiry; repeated observations alone will not
+keep a session alive.
+
+Both methods observe the default clock after the awaited storage read. An
+explicit `now` is used unchanged; hosts seeking current liveness should omit
+it. Absolute and idle boundaries are exclusive: a session is dead at either
+boundary. Invalid timestamps and idle anchors ahead of the observing clock
+fail closed, including clock rollback or host skew.
+
+A returned record is a snapshot, not a lock or a cross-store transaction.
+Revocation after that backend snapshot can overlap a successful result, and
+the session may expire before later work completes. Hosts retain their
+closing checks and any required identity, permission, and commit-time fences.
+
 ## Development
 
 Node.js 22 or 24 is required for local development (the same versions CI

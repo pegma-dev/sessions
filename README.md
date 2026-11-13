@@ -18,6 +18,13 @@ surface; this store remembers the result.
 > it is not ready for production use. Published versions are listed on
 > [npm](https://www.npmjs.com/package/@pegma/sessions).
 
+The `0.3.0` API adds `observe(sessionId, now?)`: a fresh liveness-checked read
+without an idle touch or cleanup write. Hosts can keep `get` for initial
+admission and use `observe` for closing checks that must not count as activity.
+Both use the same expiry predicate and clock semantics. Each result is a
+snapshot; later revocation or expiry is still possible. See the
+[package README](packages/sessions/README.md) for usage.
+
 The `0.2.1` change observes the default clock after awaited reads and sweeps.
 With a consistent advancing clock, a concurrent touch observed in that snapshot
 is no longer mistaken for a future timestamp merely because the operation
@@ -60,8 +67,8 @@ What it does own, it owns opinionatedly:
   The hygiene sweep is the opposite — version-conditional, so a session that
   came back to life mid-sweep survives. Keeping those two rules opposite is
   the design.
-- **Reads that garbage-collect and never resurrect** — a dead row found on
-  read is lazily purged; the idle-anchor touch declines to write back a
+- **Activity reads that garbage-collect and never resurrect** — a dead row found
+  by `get` is lazily purged; the idle-anchor touch declines to write back a
   session a concurrent destroy just removed, and a failed touch never fails
   the request.
 
