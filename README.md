@@ -18,6 +18,13 @@ surface; this store remembers the result.
 > it is not ready for production use. Published versions are listed on
 > [npm](https://www.npmjs.com/package/@pegma/sessions).
 
+The `0.3.0` API adds `observe(sessionId, now?)`: a fresh liveness-checked read
+without an idle touch or cleanup write. Hosts can keep `get` for initial
+admission and use `observe` for closing checks that must not count as activity.
+Both use the same expiry predicate and clock semantics. Each result is a
+snapshot; later revocation or expiry is still possible. See the
+[package README](packages/sessions/README.md) for usage.
+
 The `0.2.1` change observes the default clock after awaited reads and sweeps.
 With a consistent advancing clock, a concurrent touch observed in that snapshot
 is no longer mistaken for a future timestamp merely because the operation
@@ -28,13 +35,6 @@ of the observing clock is dead under the single liveness predicate and may be
 conditionally deleted. This change adds no clock-skew tolerance or coordination.
 Source versions describe behavior; publication is recorded in
 [GitHub releases](https://github.com/pegma-dev/sessions/releases).
-
-The `0.3.0` API adds `observe(sessionId, now?)`: a fresh liveness-checked read
-without an idle touch or cleanup write. Hosts can keep `get` for initial
-admission and use `observe` for closing checks that must not count as activity.
-Both use the same expiry predicate and clock semantics. Each result is a
-snapshot; later revocation or expiry is still possible. See the
-[package README](packages/sessions/README.md) for usage.
 
 Current status: the record-store package is published on npm, the first
 consumer migration is merged in

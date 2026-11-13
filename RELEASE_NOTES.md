@@ -3,9 +3,10 @@
 Add `SessionStore.observe(sessionId, now?)` for fresh liveness and identity
 checks that must not extend activity. It hashes the raw session id and performs
 one keyed backend read, then applies the existing liveness predicate. It returns
-the public record when live and null when missing, revoked, expired, idle, or
-malformed. It never touches the idle anchor or lazily deletes a dead row; backend
-read failures propagate.
+the public record when live and null when missing, revoked, or rejected by the
+shared timestamp and expiry checks. Those checks validate lifecycle timestamps,
+not principal claims or host data. It never touches the idle anchor or lazily
+deletes a dead row; backend read failures propagate.
 
 The default clock is observed after the awaited read, matching `get`; explicit
 instants retain their existing semantics. Use `get` for activity such as initial
@@ -17,9 +18,10 @@ The `0.3.0` minor version reflects the public `SessionStore` interface expansion
 under `0.x`. Existing `get`, revocation, expiry cleanup, storage schema, and
 runtime dependency pins retain their behavior. Memory and real Azure Tables
 tests cover read-only operation, exact expiry, clock observation, fresh
-revocation, concurrent touches, and snapshot limits. An initialized Azure Tables
-adapter sends one physical GET per observation, including dead and missing
-records.
+revocation, concurrent touches, and snapshot limits. On the initialized Azure
+Tables adapter's no-retry path, the tests observe one physical GET per
+observation, including dead and missing records. Adapter retries can issue
+additional physical requests.
 
 # @pegma/sessions v0.2.1
 

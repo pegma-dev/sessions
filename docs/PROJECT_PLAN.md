@@ -317,11 +317,13 @@ principal exists. `PrincipalId` would become nullable and
 needs it yet, and nullable-principal is a one-way door better opened by a
 real requirement.
 
-**Touch write amplification.** Every live `get` still writes the idle anchor.
-The `0.3.0` `observe` API addresses a measured pegma.dev Support Desk need:
-closing checks require fresh session authority but should not renew activity.
-Initial admission retains `get`, and later checks can use `observe` without
-changing idle precision. This is not a touch floor or an authority cache.
+**Touch write amplification.** A live `get` attempts a best-effort idle touch.
+Its decider keeps the existing anchor when the observed instant is no later
+than the current `lastSeenAt`, including after a concurrent touch. The `0.3.0`
+`observe` API supports hosts whose closing checks need fresh session liveness
+without renewing activity. A host can retain `get` for initial admission and
+use `observe` for later checks without changing idle precision. This is not a
+touch floor or an authority cache.
 
 ## Near-term backlog
 

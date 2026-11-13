@@ -36,7 +36,7 @@ credential re-presentable to another service.
 ## Activity reads and read-only checks
 
 Use `get(rawSessionId)` when the request should count as activity. It reads a
-live session and touches its idle anchor best-effort; a dead row is lazily
+live session and attempts a best-effort idle touch; a dead row is lazily
 deleted best-effort. The returned record describes the initial validated
 snapshot and does not claim that the touch succeeded.
 
@@ -54,8 +54,9 @@ if (current === null) return refuseRequest();
 ```
 
 `observe` hashes the id and performs one fresh keyed backend read per call. It
-returns a `SessionRecord` when live or null when missing, revoked, expired,
-idle, or malformed, using the same liveness predicate as `get` and the sweep.
+returns a `SessionRecord` when live or null when missing, revoked, or rejected
+by the timestamp and expiry checks shared with `get` and the sweep. These
+checks validate lifecycle timestamps, not principal claims or host data.
 It does not touch the idle anchor, delete dead rows, or cache earlier results.
 Backend read failures reject so the host can fail closed. Keep `get` for the
 activity that should renew idle expiry; repeated observations alone will not
