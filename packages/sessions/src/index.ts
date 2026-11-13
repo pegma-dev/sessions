@@ -47,7 +47,7 @@ export interface SessionRecord extends NewSession {
   readonly createdAt: IsoTimestamp;
   /** Absolute boundary. The session is dead at this instant, not after it. */
   readonly expiresAt: IsoTimestamp;
-  /** Idle-timeout anchor, advanced best-effort by successful reads. */
+  /** Idle-timeout anchor, advanced best-effort by successful `get` calls. */
   readonly lastSeenAt: IsoTimestamp;
 }
 
@@ -64,6 +64,16 @@ export interface SessionStore {
    * storage read; an explicit instant is used unchanged.
    */
   get(sessionId: string, now?: IsoTimestamp): Promise<SessionRecord | null>;
+
+  /**
+   * Reads a fresh record and returns it when live, otherwise null.
+   *
+   * Does not touch the idle anchor or delete dead records. An omitted `now`
+   * is observed after the storage read; an explicit instant is used unchanged.
+   * Storage read failures propagate. The returned snapshot is not a lock:
+   * revocation or expiry can occur after the read.
+   */
+  observe(sessionId: string, now?: IsoTimestamp): Promise<SessionRecord | null>;
 
   /** Idempotently revokes one session. */
   destroy(sessionId: string): Promise<void>;
@@ -303,7 +313,7 @@ function throwRevocationTransactionLimit(): never {
 /**
  * The only liveness predicate.
  *
- * Both the hot read and the hygiene sweep call this function. Invalid time
+ * Both read operations and the hygiene sweep call this function. Invalid time
  * from either the clock or storage fails closed.
  */
 function isLive(
@@ -581,6 +591,20 @@ export function createSessionStore(
         .catch(() => undefined);
 
       return publicRecord(initiallyRead);
+    },
+
+    async observe(sessionId, now) {
+      const key = sessionKey(await hashSessionId(sessionId));
+      const versioned = await sessions.getVersioned(key);
+      const observedNow = now === undefined ? clock.now() : now;
+      if (
+        versioned === null ||
+        !isSessionRecord(versioned.value) ||
+        !isLive(versioned.value, observedNow, idleTimeoutMs)
+      ) {
+        return null;
+      }
+      return publicRecord(versioned.value);
     },
 
     async destroy(sessionId) {

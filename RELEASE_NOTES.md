@@ -1,3 +1,26 @@
+# @pegma/sessions v0.3.0
+
+Add `SessionStore.observe(sessionId, now?)` for fresh liveness and identity
+checks that must not extend activity. It hashes the raw session id and performs
+one keyed backend read, then applies the existing liveness predicate. It returns
+the public record when live and null when missing, revoked, expired, idle, or
+malformed. It never touches the idle anchor or lazily deletes a dead row; backend
+read failures propagate.
+
+The default clock is observed after the awaited read, matching `get`; explicit
+instants retain their existing semantics. Use `get` for activity such as initial
+request admission and `observe` for later closing checks. Each observation reads
+the backend afresh, but its result is a snapshot, not a lock against subsequent
+revocation or expiry. Hosts still own current identity and permission checks.
+
+The `0.3.0` minor version reflects the public `SessionStore` interface expansion
+under `0.x`. Existing `get`, revocation, expiry cleanup, storage schema, and
+runtime dependency pins retain their behavior. Memory and real Azure Tables
+tests cover read-only operation, exact expiry, clock observation, fresh
+revocation, concurrent touches, and snapshot limits. An initialized Azure Tables
+adapter sends one physical GET per observation, including dead and missing
+records.
+
 # @pegma/sessions v0.2.1
 
 Fix default clock observation around awaited session reads and expiry sweeps.

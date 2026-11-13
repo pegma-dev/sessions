@@ -117,6 +117,10 @@ same function, so the two can never disagree.
   idle anchor through a decider that declines to resurrect a session a
   concurrent destroy just removed; a failed touch never fails the request.
 - `destroy(sessionId)` — delete; already-gone is success, not an error.
+- `observe(sessionId, now?)` — one fresh keyed read with the same liveness and
+  clock semantics as `get`, without an idle touch or lazy delete. Use it for
+  closing checks after the activity-bearing admission read. Backend failures
+  propagate; the result is a snapshot, not a lock against later revocation.
 - `destroyAllForPrincipal(principalId)` — sign out everywhere. Lists the
   partition and filters on the record's principal; deletes are deliberately
   **unconditional**, because a session touched concurrently must still die.
@@ -199,8 +203,8 @@ counts, revocation counts) report through the spine `Logger` port.
 
 ### In scope
 
-- The session record store: create, liveness-checked reads with idle
-  touch, destroy, principal-wide revocation, expiry sweep.
+- The session record store: create, liveness-checked activity reads with idle
+  touch, read-only observation, destroy, principal-wide revocation, expiry sweep.
 - Mandatory id hashing, dual expiry, the single liveness predicate.
 - The host data field with a host-supplied codec fragment.
 - Conformance-style tests over `createMemoryStore()` and against the Azure
@@ -313,11 +317,11 @@ principal exists. `PrincipalId` would become nullable and
 needs it yet, and nullable-principal is a one-way door better opened by a
 real requirement.
 
-**Touch write amplification.** Every live `get` writes the idle anchor. The
-reference application accepts this (its traffic is modest); a busier host
-might want a touch floor ("don't re-touch within N minutes"), trading idle
-precision for writes. Cheap to add behind a config default of 0; decide when
-a consumer measures it.
+**Touch write amplification.** Every live `get` still writes the idle anchor.
+The `0.3.0` `observe` API addresses a measured pegma.dev Support Desk need:
+closing checks require fresh session authority but should not renew activity.
+Initial admission retains `get`, and later checks can use `observe` without
+changing idle precision. This is not a touch floor or an authority cache.
 
 ## Near-term backlog
 
